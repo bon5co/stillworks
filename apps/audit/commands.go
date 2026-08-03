@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/bon5co/godjango/database"
@@ -49,7 +50,7 @@ func Commands(services management.ProjectServices) []management.Command {
 			Summary: "Run one probe cycle over every active keyless endpoint",
 			Run: func(ctx context.Context, _ []string, streams management.Streams) error {
 				return withDatabase(ctx, services, func(db *database.DB) error {
-					return runCycle(ctx, db, streams)
+					return runCycle(ctx, db, streams.Out)
 				})
 			},
 		},
@@ -74,7 +75,7 @@ func withDatabase(
 
 // runCycle is one polite pass: for each active endpoint, one models call, then
 // at most modelsPerCycle chat calls against the least recently checked models.
-func runCycle(ctx context.Context, db *database.DB, streams management.Streams) error {
+func runCycle(ctx context.Context, db *database.DB, out io.Writer) error {
 	var endpoints []Endpoint
 	if err := db.Bun().NewSelect().
 		Model(&endpoints).
@@ -93,7 +94,7 @@ func runCycle(ctx context.Context, db *database.DB, streams management.Streams) 
 		if err := insertProbe(ctx, db, probe); err != nil {
 			return err
 		}
-		fmt.Fprintf(streams.Out, "%-14s models  %-12s %5dms  %d listed\n",
+		fmt.Fprintf(out, "%-14s models  %-12s %5dms  %d listed\n",
 			endpoint.Slug, probe.Outcome, probe.LatencyMS, probe.ModelsListed)
 
 		if err := recordModels(ctx, db, endpoint, discovered); err != nil {
@@ -112,7 +113,7 @@ func runCycle(ctx context.Context, db *database.DB, streams management.Streams) 
 			if err := recordChatResult(ctx, db, candidate, chat); err != nil {
 				return err
 			}
-			fmt.Fprintf(streams.Out, "%-14s chat    %-12s %5dms  %s\n",
+			fmt.Fprintf(out, "%-14s chat    %-12s %5dms  %s\n",
 				endpoint.Slug, chat.Outcome, chat.LatencyMS, candidate.ModelID)
 		}
 	}

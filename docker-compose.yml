@@ -1,0 +1,42 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://stillworks:${POSTGRES_PASSWORD}@db:5432/stillworks?sslmode=disable
+      SESSION_SECRET: ${SESSION_SECRET}
+      DEBUG: "false"
+      PORT: "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+      - dokploy-network
+
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stillworks
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: stillworks
+    volumes:
+      - stillworks-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stillworks -d stillworks"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - default
+
+volumes:
+  stillworks-db:
+
+networks:
+  default:
+  dokploy-network:
+    external: true

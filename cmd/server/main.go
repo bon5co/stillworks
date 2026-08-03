@@ -12,6 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"log/slog"
+
+	"stillworks/apps/audit"
+
 	"github.com/bon5co/godjango/auth"
 	"github.com/bon5co/godjango/database"
 	"github.com/bon5co/godjango/web"
@@ -110,6 +114,11 @@ func main() {
 	if err != nil {
 		exit(err)
 	}
+	// The prober runs inside this process rather than as a host cron entry, so
+	// the deployment stays one self-contained thing.
+	proberCtx, stopProber := context.WithCancel(context.Background())
+	defer stopProber()
+	audit.StartProber(proberCtx, db, probeInterval(), slog.Default())
 	fmt.Fprintf(os.Stdout, "Starting development server at http://%s/\n", address)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -134,4 +143,21 @@ func derive(secret string, purpose string) []byte {
 func exit(err error) {
 	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
+}
+
+// probeInterval lets a deployment slow the prober down without a rebuild.
+// Anything unparseable falls back to the default rather than disabling probing
+// silently, because an instance that has quietly stopped checking is the exact
+// failure this project exists to expose.
+func probeInterval() time.Duration {
+	raw := os.Getenv("PROBE_INTERVAL")
+	if raw == "" {
+		return audit.DefaultProbeInterval
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		fmt.Fprintf(os.Stderr, "stillworks: ignoring PROBE_INTERVAL=%q: %v\n", raw, err)
+		return audit.DefaultProbeInterval
+	}
+	return parsed
 }

@@ -122,8 +122,10 @@ func (h *handlers) apiUp(response http.ResponseWriter, request *http.Request) {
 		"count":        len(working),
 		// Stated in the payload so a consumer cannot mistake this for a
 		// guarantee about somebody else's free service.
-		"disclaimer": "Every entry was verified by a real call carrying no Authorization header, at the time shown. " +
-			"These are other people's free services: they can add a key requirement or disappear at any moment.",
+		"disclaimer": "Every entry was verified by a real call carrying no Authorization header, at the time shown, " +
+			"from this service's own IP address. Keyless quotas are commonly per-IP: an endpoint verified here can " +
+			"still answer 402 or 429 from yours. These are other people's free services and can add a key " +
+			"requirement or disappear at any moment.",
 		"models": working,
 	})
 }
