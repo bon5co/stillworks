@@ -23,7 +23,13 @@ func TestClassifySeparatesKeyDemandFromDowntime(t *testing.T) {
 	}{
 		{"ok", http.StatusOK, nil, nil, OutcomeOK},
 		{"unauthorized is a false keyless claim", http.StatusUnauthorized, nil, nil, OutcomeNeedsKey},
-		{"payment required is a false keyless claim", http.StatusPaymentRequired, nil, nil, OutcomeNeedsKey},
+		{"payment required with no explanation", http.StatusPaymentRequired, nil, nil, OutcomeNeedsKey},
+		// Verbatim from pollinations on 2026-08-03, returned to a request that
+		// carried no key at all; the same endpoint served 200 a minute later.
+		{"payment required because the anonymous pool ran dry", http.StatusPaymentRequired,
+			[]byte(`{"error":"402 Payment Required","status":402,"details":{"success":false,` +
+				`"error":{"message":"API key budget too low. This request requires more credits"}}}`),
+			nil, OutcomeRateLimited},
 		{"403 from an API asking for a key", http.StatusForbidden, []byte(apiKeyRefusal), nil, OutcomeNeedsKey},
 		{"403 from a proxy is blocked, not a key demand", http.StatusForbidden, []byte(nginxForbidden), nil, OutcomeBlocked},
 		{"403 with no body is blocked", http.StatusForbidden, nil, nil, OutcomeBlocked},
