@@ -43,6 +43,11 @@ templ ShelfPage(rows []ShelfRow, working []WorkingModel) {
 		@header()
 		<h1>Free LLM endpoints</h1>
 		<p class="tag">Keyless only. A free tier that wants a signup belongs on somebody else's list.</p>
+		<p class="muted">
+			Verified from this server's IP address. Keyless quotas are usually per-IP, so an
+			endpoint that answers here can still return 402 or 429 from yours — which is why the
+			<strong>Worked</strong> column is worth more than the last green tick.
+		</p>
 		<h2>Working right now</h2>
 		if len(working) == 0 {
 			<p class="muted">Nothing is currently verified as keyless. That is a real answer, not a loading state.</p>

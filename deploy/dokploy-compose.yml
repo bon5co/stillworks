@@ -1,0 +1,50 @@
+# Deployed on calico (the Dokploy panel host) as a raw compose stack.
+#
+# The image is prebuilt and pushed multi-arch to Docker Hub rather than built
+# from source on the server: the repository stays private, and the host's
+# architecture stops mattering.
+#
+# Both services sit on dokploy-network only. That network is shared with every
+# other stack on the host, so the database service is named stillworks-db
+# rather than db -- n8n, chatwoot and lobe-chat all ship a service called db,
+# and an alias collision there would be an ugly thing to debug.
+services:
+  app:
+    image: lodimup/stillworks:0.2.1
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://stillworks:${POSTGRES_PASSWORD}@stillworks-db:5432/stillworks?sslmode=disable
+      SESSION_SECRET: ${SESSION_SECRET}
+      DEBUG: "false"
+      PORT: "8000"
+    depends_on:
+      stillworks-db:
+        condition: service_healthy
+    networks:
+      - dokploy-network
+
+  stillworks-db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stillworks
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: stillworks
+    volumes:
+      # postgres:18 moved the data directory; mounting /var/lib/postgresql/data
+      # makes the image refuse to start.
+      - stillworks-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stillworks -d stillworks"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - dokploy-network
+
+volumes:
+  stillworks-db:
+
+networks:
+  dokploy-network:
+    external: true
