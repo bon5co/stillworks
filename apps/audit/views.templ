@@ -1,0 +1,269 @@
+package audit
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+templ header() {
+	<div class="shelf-nav muted">
+		<a href="/">stillworks</a>
+		<a href="/llm/">free LLM endpoints</a>
+		<a href="/mcp/">MCP servers</a>
+	</div>
+}
+
+templ HomePage(working []WorkingModel, checked *time.Time) {
+	<div class="sw">
+		@header()
+		<h1>Directories list. We check.</h1>
+		<p class="tag">Nothing here is trusted because someone published it. Everything is re-probed, and every claim carries the time it was measured.</p>
+		<p class="lede">
+			There are more than twenty thousand MCP servers listed across the registries and a
+			dozen competing lists of free LLM APIs. Almost none of them are re-tested. A list
+			that is never re-probed is a list of things that <em>used to</em> work.
+		</p>
+		<h2>Free LLM endpoints — no key, no signup</h2>
+		<p>
+			{ fmt.Sprintf("%d model(s)", len(working)) } verified answering with no API key at all
+			if checked != nil {
+				<span class="when">, last checked { humanWhen(*checked) }</span>
+			}
+			. <a href="/llm/">See the shelf</a>, or ask the API:
+		</p>
+		<pre>curl https://stillworks.supercapybara.com/api/llm/up</pre>
+		<h2>MCP servers</h2>
+		<p class="muted">Not open yet. The LLM shelf ships first and has to earn its keep before the second one starts.</p>
+	</div>
+}
+
+templ ShelfPage(rows []ShelfRow, working []WorkingModel) {
+	<div class="sw">
+		@header()
+		<h1>Free LLM endpoints</h1>
+		<p class="tag">Keyless only. A free tier that wants a signup belongs on somebody else's list.</p>
+		<h2>Working right now</h2>
+		if len(working) == 0 {
+			<p class="muted">Nothing is currently verified as keyless. That is a real answer, not a loading state.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Model</th><th>Endpoint</th><th>Tier</th><th>Latency</th><th>Worked</th><th>Verified</th></tr>
+				</thead>
+				<tbody>
+					for _, model := range working {
+						<tr>
+							<td><code>{ model.ModelID }</code></td>
+							<td><a href={ templ.SafeURL("/llm/" + model.Slug) }>{ model.Slug }</a></td>
+							<td class="muted">{ orDash(model.Tier) }</td>
+							<td class="when">{ latency(model.LatencyMS) }</td>
+							<td class="when">{ reliability(model.Successes, model.Attempts) }</td>
+							<td class="when">{ humanWhenPtr(model.LastOK) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			<h2>Call one</h2>
+			<pre>{ snippet(working[0]) }</pre>
+		}
+		<h2>Every endpoint we track</h2>
+		<table>
+			<thead>
+				<tr><th>Endpoint</th><th>Last result</th><th>Models listed</th><th>Keyless</th><th>Key required</th><th>Checked</th></tr>
+			</thead>
+			<tbody>
+				for _, row := range rows {
+					<tr>
+						<td>
+							<a href={ templ.SafeURL("/llm/" + row.Slug) }>{ row.Slug }</a>
+							<div class="muted">{ row.Provider }</div>
+						</td>
+						<td><span class={ outcomeClass(row.Outcome) }>{ row.Outcome }</span></td>
+						<td>{ fmt.Sprint(row.ModelsListed) }</td>
+						<td>{ fmt.Sprint(row.WorkingModels) }</td>
+						<td>{ fmt.Sprint(row.KeyOnlyModels) }</td>
+						<td class="when">{ humanWhenPtr(row.CheckedAt) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
+	<div class="sw">
+		@header()
+		<h1>{ row.Slug }</h1>
+		<p class="tag">
+			{ row.Provider } —
+			<code>{ row.BaseURL }</code>
+			if row.DocsURL != "" {
+				— <a href={ templ.SafeURL(row.DocsURL) } rel="nofollow noopener">docs</a>
+			}
+		</p>
+		if row.Notes != "" {
+			<p class="lede muted">{ row.Notes }</p>
+		}
+		<h2>Models</h2>
+		<table>
+			<thead>
+				<tr><th>Model</th><th>Tier</th><th>Keyless</th><th>Chat</th><th>Worked</th><th>Last checked</th><th>Last listed</th></tr>
+			</thead>
+			<tbody>
+				for _, model := range models {
+					<tr>
+						<td><code>{ model.ModelID }</code></td>
+						<td class="muted">{ orDash(model.Tier) }</td>
+						<td>{ keylessLabel(model.Keyless) }</td>
+						<td class="muted">
+							if model.ChatCapable {
+								yes
+							} else {
+								not a chat model
+							}
+						</td>
+							<td class="when">{ reliability(model.Successes, model.Attempts) }</td>
+						<td class="when">{ humanWhenPtr(model.LastChecked) }</td>
+						<td class="when">{ humanWhen(model.LastSeen) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+		<h2>Raw probe log</h2>
+		<p class="muted">Our working, so you can check it rather than trust it.</p>
+		<table>
+			<thead>
+				<tr><th>When</th><th>Kind</th><th>Outcome</th><th>HTTP</th><th>Latency</th><th>Model</th><th>Detail</th></tr>
+			</thead>
+			<tbody>
+				for _, probe := range probes {
+					<tr>
+						<td class="when">{ humanWhen(probe.StartedAt) }</td>
+						<td>{ probe.Kind }</td>
+						<td><span class={ outcomeClass(probe.Outcome) }>{ probe.Outcome }</span></td>
+						<td>{ statusLabel(probe.HTTPStatus) }</td>
+						<td class="when">{ latency(probe.LatencyMS) }</td>
+						<td><code>{ orDash(probe.ModelUsed) }</code></td>
+						<td class="muted">{ truncate(probe.Error, 90) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+templ NotFoundPage(what string) {
+	<div class="sw">
+		@header()
+		<h1>Not here</h1>
+		<p class="muted">{ what }</p>
+	</div>
+}
+
+templ ComingSoonPage() {
+	<div class="sw">
+		@header()
+		<h1>MCP servers</h1>
+		<p class="lede">
+			Twenty thousand servers are listed across the registries and you cannot know what any
+			of them exposes without running it. That shelf will record what each one actually
+			does: whether it starts, which tools it registers, and which secrets it demands.
+		</p>
+		<p class="muted">Not open yet. The LLM shelf ships first and has to earn its keep.</p>
+	</div>
+}
+
+func outcomeClass(outcome string) string {
+	switch outcome {
+	case OutcomeOK:
+		return "ok"
+	case OutcomeNeedsKey, OutcomeBlocked, OutcomeUnreachable, OutcomeServerError, OutcomeBadBody:
+		return "bad"
+	case OutcomeRateLimited, OutcomeTimeout, OutcomeClientError:
+		return "warn"
+	default:
+		return "muted"
+	}
+}
+
+func keylessLabel(keyless *bool) string {
+	if keyless == nil {
+		return "not yet checked"
+	}
+	if *keyless {
+		return "yes"
+	}
+	return "needs a key"
+}
+
+// reliability is shown as a plain fraction rather than a percentage: 2 of 3 is
+// honest about the sample size in a way that "67%" is not.
+func reliability(successes, attempts int) string {
+	if attempts == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%d/%d", successes, attempts)
+}
+
+func orDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "—"
+	}
+	return value
+}
+
+func latency(ms int) string {
+	if ms <= 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%d ms", ms)
+}
+
+func statusLabel(status int) string {
+	if status == 0 {
+		return "—"
+	}
+	return fmt.Sprint(status)
+}
+
+func truncate(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "…"
+}
+
+func humanWhenPtr(at *time.Time) string {
+	if at == nil {
+		return "never"
+	}
+	return humanWhen(*at)
+}
+
+// humanWhen is deliberately relative. An absolute timestamp invites a reader to
+// assume freshness; "3 days ago" does not.
+func humanWhen(at time.Time) string {
+	if at.IsZero() {
+		return "never"
+	}
+	elapsed := time.Since(at)
+	switch {
+	case elapsed < time.Minute:
+		return "just now"
+	case elapsed < time.Hour:
+		return fmt.Sprintf("%d min ago", int(elapsed.Minutes()))
+	case elapsed < 48*time.Hour:
+		return fmt.Sprintf("%d h ago", int(elapsed.Hours()))
+	default:
+		return fmt.Sprintf("%d days ago", int(elapsed.Hours()/24))
+	}
+}
+
+func snippet(model WorkingModel) string {
+	return fmt.Sprintf(`curl %s%s \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"%s","messages":[{"role":"user","content":"hello"}]}'`,
+		strings.TrimSuffix(model.BaseURL, "/"), model.ChatPath, model.ModelID)
+}

@@ -1,0 +1,126 @@
+/* stillworks. Served from the app and linked through RenderOptions.Stylesheets:
+   the default CSP is default-src 'self', so an inline <style> is dropped. */
+
+:root {
+	--ink: #12141a;
+	--muted: #5b6270;
+	--line: #e3e6ea;
+	--ok: #0f7b3f;
+	--bad: #a3262b;
+	--warn: #8a5a00;
+	--bg: #fff;
+	--panel: rgba(15, 20, 30, .04);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--ink: #e8e9ed;
+		--muted: #99a0ab;
+		--line: #272b34;
+		--ok: #4ade80;
+		--bad: #f87171;
+		--warn: #fbbf24;
+		--bg: #0f1116;
+		--panel: rgba(255, 255, 255, .05);
+	}
+}
+
+body {
+	background: var(--bg);
+	color: var(--ink);
+	margin: 0;
+}
+
+.sw {
+	max-width: 64rem;
+	margin: 0 auto;
+	padding: 2.5rem 1.25rem 5rem;
+	font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.sw a { color: inherit; }
+.sw a:hover { text-decoration-thickness: 2px; }
+
+.sw h1 {
+	font-size: 2rem;
+	margin: 0 0 .35rem;
+	letter-spacing: -.02em;
+}
+
+.sw h2 {
+	font-size: 1.1rem;
+	margin: 2.75rem 0 .75rem;
+	letter-spacing: -.01em;
+}
+
+.sw .tag {
+	color: var(--muted);
+	margin: 0 0 1.75rem;
+}
+
+.sw .lede {
+	font-size: 1.05rem;
+	max-width: 46rem;
+}
+
+.sw table {
+	border-collapse: collapse;
+	width: 100%;
+	font-size: .92rem;
+}
+
+.sw th,
+.sw td {
+	text-align: left;
+	padding: .55rem .65rem;
+	border-bottom: 1px solid var(--line);
+	vertical-align: top;
+}
+
+.sw th {
+	font-weight: 600;
+	color: var(--muted);
+	font-size: .72rem;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+	white-space: nowrap;
+}
+
+.sw tbody tr:hover { background: var(--panel); }
+
+.sw code,
+.sw pre {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: .86em;
+}
+
+.sw pre {
+	background: var(--panel);
+	padding: .9rem 1.1rem;
+	border-radius: .45rem;
+	overflow-x: auto;
+	border: 1px solid var(--line);
+}
+
+.ok { color: var(--ok); font-weight: 600; }
+.bad { color: var(--bad); font-weight: 600; }
+.warn { color: var(--warn); font-weight: 600; }
+.muted { color: var(--muted); }
+
+.when {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.shelf-nav {
+	margin-bottom: 2rem;
+	font-size: .9rem;
+}
+
+.shelf-nav a { margin-right: 1.1rem; }
+
+/* The detail tables are wide by nature; let them scroll rather than squeeze. */
+.sw .scroll {
+	overflow-x: auto;
+}

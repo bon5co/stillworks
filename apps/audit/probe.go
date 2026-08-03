@@ -101,7 +101,17 @@ func classify(status int, body []byte, err error) string {
 		return OutcomeUnreachable
 	}
 	switch {
-	case status == http.StatusUnauthorized, status == http.StatusPaymentRequired:
+	case status == http.StatusUnauthorized:
+		return OutcomeNeedsKey
+	case status == http.StatusPaymentRequired:
+		// 402 is ambiguous in the same way 403 is. Pollinations returned
+		// "API key budget too low" to a request carrying no key at all on
+		// 2026-08-03, and served 200 again a minute later: the anonymous pool
+		// had momentarily run dry. Recording that as needs_key would flip a
+		// genuinely keyless provider to "requires a key" on a hiccup.
+		if mentionsExhaustedBudget(body) {
+			return OutcomeRateLimited
+		}
 		return OutcomeNeedsKey
 	case status == http.StatusForbidden:
 		// A 403 is ambiguous. mlvoca.com serves a bare nginx "403 Forbidden"
@@ -130,6 +140,22 @@ var credentialWords = []string{
 	"api key", "api_key", "apikey", "missing_api_key",
 	"unauthorized", "authentication", "authorization",
 	"token", "credential", "sign up", "signup", "register",
+}
+
+// budgetWords say "you have run out", not "who are you".
+var budgetWords = []string{
+	"budget", "quota", "credit", "insufficient", "balance",
+	"exceeded", "out of funds", "too low",
+}
+
+func mentionsExhaustedBudget(body []byte) bool {
+	lowered := strings.ToLower(string(body))
+	for _, word := range budgetWords {
+		if strings.Contains(lowered, word) {
+			return true
+		}
+	}
+	return false
 }
 
 func mentionsCredentials(body []byte) bool {

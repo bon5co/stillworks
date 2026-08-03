@@ -3,7 +3,7 @@ module stillworks
 go 1.26.5
 
 require (
-	github.com/bon5co/godjango v0.0.0-20260803164232-89296f0d794f
+	github.com/bon5co/godjango v0.0.0-20260803171110-c37710f0d1fb
 	github.com/go-chi/chi/v5 v5.3.1
 )
 
