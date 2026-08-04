@@ -151,9 +151,54 @@ body {
 .sw ul { max-width: 46rem; padding-left: 1.1rem; }
 .sw li { margin-bottom: .45rem; }
 
-/* The detail tables are wide by nature; let them scroll rather than squeeze. */
+/* The detail tables are wide by nature; let them scroll rather than squeeze.
+   The shadows are the affordance: without them a table that runs off the edge
+   looks like a table that simply ends, and on a phone the whole right-hand side
+   of the shelf -- including the button -- was undiscoverable. They appear only
+   on the side there is actually more content on, because `local` backgrounds
+   scroll with the content while `scroll` ones stay put.
+
+   Left side only. A right-edge shadow was written first and never appeared:
+   the sticky last column below paints an opaque background over exactly that
+   strip, in a later stacking layer. The pinned column is its own signal that
+   the row continues, so the rule was removed rather than fought. */
 .sw .scroll {
 	overflow-x: auto;
+	background:
+		linear-gradient(to right, var(--bg) 30%, rgba(0, 0, 0, 0)) left center / 2.5rem 100% no-repeat,
+		radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, .28), rgba(0, 0, 0, 0)) left center / .9rem 100% no-repeat;
+	background-attachment: local, scroll;
+}
+
+/* max-content, not 100%: forced to the container width the cells squeeze until
+   the last column is sliced in half, which is how the test-call button shipped
+   reading "Test ca" at 1024px. A row may be wider than the page; it may not be
+   cut. */
+.sw .scroll > table {
+	width: 100%;
+	min-width: max-content;
+}
+
+/* The call to action is pinned to the right edge, so scrolling the matrix never
+   pushes the button out of reach. It needs its own background or the cells
+   underneath show through as it passes. */
+.sw .scroll > table th:last-child,
+.sw .scroll > table td:last-child {
+	position: sticky;
+	right: 0;
+	background: var(--bg);
+	border-left: 1px solid var(--line);
+}
+
+.sw .narrow-only { display: none; }
+
+/* Below this width the feature matrix costs more than it tells. Model,
+   endpoint, latency, track record and the button survive; the four capability
+   columns fold away with a line saying where they went, because silently
+   dropping data is the habit this site exists to complain about. */
+@media (max-width: 760px) {
+	.sw .feature { display: none; }
+	.sw .narrow-only { display: block; }
 }
 
 /* A sorted column header is a link, so it has to look clickable without

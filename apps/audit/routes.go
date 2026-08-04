@@ -37,6 +37,21 @@ var appCSS []byte
 //go:embed static/app.js
 var appJS []byte
 
+// The mark: one verified-green sample square, the same one that sits at the end
+// of the pulse on the social card. Repetition is the whole value of a
+// distinctive asset, so the two files are deliberately the same shape.
+//
+//go:embed static/favicon.png
+var faviconPNG []byte
+
+// The social card is embedded now and served now, even though nothing links to
+// it yet: godjango's Layout owns the document head and has no way for an app to
+// declare og:image, so the <meta> tags wait on a framework change. Serving it
+// first means that change is a one-line addition rather than a deploy.
+//
+//go:embed static/og-card.png
+var socialCardPNG []byte
+
 // Both asset paths are versioned by content so a deploy cannot serve a stale
 // cached file, and both are linked through RenderOptions rather than inlined:
 // the default CSP is default-src 'self' and drops inline styles and inline
@@ -44,7 +59,15 @@ var appJS []byte
 var (
 	stylesheetPath = fmt.Sprintf("/static/stillworks/app.%x.css", sha256.Sum224(appCSS))
 	scriptPath     = fmt.Sprintf("/static/stillworks/app.%x.js", sha256.Sum224(appJS))
+	faviconPath    = fmt.Sprintf("/static/stillworks/mark.%x.png", sha256.Sum224(faviconPNG))
+	// SocialCardPath is exported because a link preview needs an absolute URL,
+	// which only the deployment knows.
+	socialCardPath = fmt.Sprintf("/static/stillworks/card.%x.png", sha256.Sum224(socialCardPNG))
 )
+
+// SocialCardPath is the content-hashed path of the link-preview image, for
+// whoever ends up writing the og:image tag.
+func SocialCardPath() string { return socialCardPath }
 
 // RoutesWithServices is the framework's hook for an app that needs the
 // long-lived database pool rather than only a router.
@@ -58,6 +81,15 @@ func (a *App) RoutesWithServices(router chi.Router, services web.RuntimeServices
 
 	router.Get(stylesheetPath, serveStylesheet)
 	router.Get(scriptPath, serveScript)
+
+	// /favicon.ico is requested by every browser without being linked, which is
+	// the only reason the tab icon can ship before the framework can express a
+	// <link> tag at all. Neither asset is counted: a browser fetching an icon
+	// is not a visit, and inflating the number the project is judged on with
+	// automatic requests would make it worthless.
+	router.Get("/favicon.ico", serveFavicon)
+	router.Get(faviconPath, serveFavicon)
+	router.Get(socialCardPath, serveSocialCard)
 
 	router.Get("/", track(KindPage, handlers.home))
 	router.Get("/llm/", track(KindPage, handlers.shelf))
@@ -410,6 +442,25 @@ func serveScript(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeContent(response, request, "app.js", time.Time{}, bytes.NewReader(appJS))
+}
+
+func serveFavicon(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Content-Type", "image/png")
+	// /favicon.ico carries no content hash, so it gets a day rather than a
+	// year: long enough to stop the repeat fetches, short enough that a changed
+	// mark is not stuck in caches for a year.
+	if request.URL.Path == faviconPath {
+		response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		response.Header().Set("Cache-Control", "public, max-age=86400")
+	}
+	http.ServeContent(response, request, "favicon.png", time.Time{}, bytes.NewReader(faviconPNG))
+}
+
+func serveSocialCard(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Content-Type", "image/png")
+	response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	http.ServeContent(response, request, "og-card.png", time.Time{}, bytes.NewReader(socialCardPNG))
 }
 
 func render(response http.ResponseWriter, request *http.Request, title string, content templ.Component) {

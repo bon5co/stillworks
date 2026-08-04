@@ -130,8 +130,8 @@ templ ShelfPage(
 						<tr>
 							@workingHeader(query, "model", "Model")
 							@workingHeader(query, "endpoint", "Endpoint")
-							<th>Tier</th>
-							<th>Tools</th><th>Schema</th><th>JSON</th><th>Vision</th>
+							<th class="feature">Tier</th>
+							<th class="feature">Tools</th><th class="feature">Schema</th><th class="feature">JSON</th><th class="feature">Vision</th>
 							@workingHeader(query, "latency", "Latency")
 							@workingHeader(query, "reliability", "Worked")
 							@workingHeader(query, "verified", "Verified")
@@ -143,7 +143,7 @@ templ ShelfPage(
 							<tr>
 								<td><code>{ model.ModelID }</code></td>
 								<td><a href={ templ.SafeURL("/llm/" + model.Slug) }>{ model.Slug }</a></td>
-								<td class="muted">{ orDash(model.Tier) }</td>
+								<td class="muted feature">{ orDash(model.Tier) }</td>
 								for _, capability := range ChatCapabilities {
 									@capabilityCell(model.Capabilities, capability)
 								}
@@ -162,6 +162,10 @@ templ ShelfPage(
 				A feature column says what a real call proved, not what the provider's own
 				listing claims. A dash is a question nobody has asked yet, which is never the
 				same as a no. Ask the API for the ones you need:
+			</p>
+			<p class="muted narrow-only">
+				The feature columns are folded away at this width. Open an endpoint to see the
+				full matrix, or ask the API.
 			</p>
 			<pre>curl 'https://stillworks.supercapybara.com/api/llm/up?feature=tools,json_schema'</pre>
 			<h2>Call one</h2>
@@ -435,15 +439,19 @@ templ StatsPage(report TrafficReport, dropped int64) {
 // capabilityCell renders one feature verdict. A capability nobody has asked
 // about renders as a dash and never as a "no": the whole tri-state exists so
 // that "we have not checked" and "it does not work" stay different answers.
+// The feature column is marked so a narrow screen can fold these four away.
+// They are the widest part of a row and the least urgent: a phone visitor wants
+// to know what answers and to press the button, and the full matrix is one tap
+// away on the endpoint page.
 templ capabilityCell(records map[string]CapabilityRecord, capability string) {
 	if record, held := records[capability]; !held || record.Supported == nil {
-		<td class="muted" title="never verified">—</td>
+		<td class="muted feature" title="never verified">—</td>
 	} else if *record.Supported {
-		<td class="ok" title={ "verified " + humanWhenPtr(record.LastOK) }>yes</td>
+		<td class="ok feature" title={ "verified " + humanWhenPtr(record.LastOK) }>yes</td>
 	} else if record.ClaimContradicted() {
-		<td class="bad" title={ truncate(record.LastError, 160) }>no, claimed</td>
+		<td class="bad feature" title={ truncate(record.LastError, 160) }>no, claimed</td>
 	} else {
-		<td class="bad" title={ truncate(record.LastError, 160) }>no</td>
+		<td class="bad feature" title={ truncate(record.LastError, 160) }>no</td>
 	}
 }
 
