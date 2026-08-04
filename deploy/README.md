@@ -56,6 +56,64 @@ Note that the traffic counts and the per-visitor test-call limit are keyed on
 governed by this setting either way. Making those read the framework's resolved
 address is a separate change with its own effect on the published numbers.
 
+### `PLAUSIBLE_HOST`
+
+Optional, defaults to unset. The Plausible instance this deployment reports to —
+`https://plausible.supercapybara.com` on the live stack. Exactly
+`scheme://host[:port]`, same shape and same startup refusal as `PUBLIC_ORIGIN`.
+
+Unset means no analytics at all: the pages link no analytics script, no route
+forwards anything, and the site's own traffic recorder carries on alone. That is
+what local development and the test suite run.
+
+Set, it additionally **requires `PUBLIC_ORIGIN`** and the process refuses to
+start without it. Plausible files an event under the domain the event names, and
+one naming nothing is answered `202` and then discarded — a deployment that
+looked configured and reported forever zero.
+
+Everything Plausible needs is served from this origin:
+
+| Path              | What it is                                                      |
+| ----------------- | ---------------------------------------------------------------- |
+| `/js/s.<hash>.js` | A loader that injects the tracking script with the site name.    |
+| `/js/p.<hash>.js` | The vendored Plausible script, `apps/audit/static/plausible.js`. |
+| `POST /api/event` | Relays one event to `PLAUSIBLE_HOST` from this server.           |
+
+This is not a preference. The page's Content-Security-Policy is
+`default-src 'self'`, so a `<script src="https://plausible.…/js/script.js">` is
+dropped by the browser before it runs: no error a visitor sees, none in our
+logs, no pageviews, and a page that looks exactly right. Serving from this
+origin keeps the policy untouched and, as a bonus, survives the blocklists that
+match on the analytics vendor's hostname.
+
+Three things about that relay are worth knowing before changing it:
+
+- **The visitor's address travels in `X-Plausible-IP`.** Plausible reads
+  `X-Plausible-IP`, then `CF-Connecting-IP`, then `X-Forwarded-For`. Every
+  request out of here crosses Cloudflare — which overwrites `CF-Connecting-IP`
+  with *this server's* address — and then a Traefik that rewrites
+  `X-Forwarded-For` to whatever it sees. Send only `X-Forwarded-For` and the
+  dashboard reports one visitor, us, for the entire internet. Measured on
+  2026-08-04 against a throwaway site: `X-Forwarded-For: 8.8.8.8` was filed
+  under Japan; `X-Plausible-IP: 8.8.8.8` was filed under the United States.
+- **Requests from `INTERNAL_NETWORKS` are dropped, not relayed.** The traffic
+  recorder excludes our own deploy checks for a reason written on its own type;
+  a second measurement repeating that mistake would be worse than no second
+  measurement. To see a pageview of your own land in the dashboard, take your
+  address out of `INTERNAL_NETWORKS` for as long as the check takes.
+- **The routes live on the outermost mux, outside the application router.**
+  `POST /api/event` carries no CSRF token, and the router's CSRF middleware
+  compares the `Origin` header against the scheme *this process* sees — http
+  behind the TLS-terminating proxy, https in the browser. Inside the router the
+  event would be answered `403` in production and pass in local development.
+
+Refreshing the vendored script: fetch `<PLAUSIBLE_HOST>/js/script.js` and
+replace the body of `apps/audit/static/plausible.js`, keeping the provenance
+comment at the top. Nothing in this repository generates that file. The
+`data-domain` / `data-api` snippet is the documented alternative to Plausible's
+newer per-site `pa-*.js` script, which needs an inline `<script>` this CSP
+forbids.
+
 ## Optional: the key-required shelf
 
 `/llm/keyed/` publishes providers whose free tier needs an API key. We hold one

@@ -29,6 +29,13 @@ services:
       # Without it the numbers that decide whether this project continues are
       # mostly us checking that it is up.
       INTERNAL_NETWORKS: "${INTERNAL_NETWORKS}"
+      # The Plausible instance this deployment reports to, alongside the site's
+      # own traffic recorder. Everything it needs is served from this origin --
+      # the page's Content-Security-Policy is default-src 'self' and would drop
+      # a third-party script silently. Unset means no analytics at all and
+      # changes nothing else. Requires PUBLIC_ORIGIN: Plausible files an event
+      # under the domain the event names. See deploy/README.md.
+      PLAUSIBLE_HOST: ${PLAUSIBLE_HOST:-}
       # Free-tier keys for the key-required shelf. See README.md in this
       # directory for where each one comes from and what happens without it.
       #
