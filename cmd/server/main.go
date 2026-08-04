@@ -44,7 +44,8 @@ func main() {
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
 	auditApp := audit.New()
-	recorder, err := audit.StartRecorder(backgroundCtx, db, slog.Default())
+	internalNetworks := audit.ParseInternalNetworks(settings.InternalNetworks, slog.Default())
+	recorder, err := audit.StartRecorder(backgroundCtx, db, internalNetworks, slog.Default())
 	if err != nil {
 		exit(err)
 	}

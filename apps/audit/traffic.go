@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -54,6 +55,57 @@ type TrafficEvent struct {
 	ReferrerHost string    `bun:"referrer_host,notnull"`
 	UserAgent    string    `bun:"user_agent,notnull"`
 	IsCrawler    bool      `bun:"is_crawler,notnull"`
+	IsInternal   bool      `bun:"is_internal,notnull"`
+}
+
+// InternalNetworks is the set of addresses whose requests are our own work --
+// the machine this is developed on, the host it is deployed to, anything else
+// named in INTERNAL_NETWORKS. It exists because the first day's numbers read
+// fifteen visitors and every one of them was a deploy check.
+type InternalNetworks struct {
+	prefixes []netip.Prefix
+}
+
+// ParseInternalNetworks reads a comma-separated list of addresses or CIDR
+// blocks. An unparseable entry is skipped rather than fatal: a typo in one
+// deployment variable must not stop the site from serving, and the consequence
+// is only that some of our own traffic gets counted as somebody else's -- which
+// is the situation this whole change is correcting, not a new failure.
+func ParseInternalNetworks(raw string, logger *slog.Logger) InternalNetworks {
+	var networks InternalNetworks
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(entry); err == nil {
+			networks.prefixes = append(networks.prefixes, prefix)
+			continue
+		}
+		address, err := netip.ParseAddr(entry)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("stillworks ignoring unparseable internal network", "entry", entry, "error", err)
+			}
+			continue
+		}
+		networks.prefixes = append(networks.prefixes, netip.PrefixFrom(address, address.BitLen()))
+	}
+	return networks
+}
+
+// Contains reports whether an address belongs to us.
+func (n InternalNetworks) Contains(address string) bool {
+	parsed, err := netip.ParseAddr(address)
+	if err != nil {
+		return false
+	}
+	for _, prefix := range n.prefixes {
+		if prefix.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }
 
 type trafficSalt struct {
@@ -79,11 +131,18 @@ type Recorder struct {
 	// closed is closed once the writer has flushed and returned, so shutdown
 	// can wait for the last batch instead of racing the process exit.
 	closed chan struct{}
+	// internal is the set of addresses whose requests are our own work.
+	internal InternalNetworks
 }
 
 // StartRecorder loads (or creates) the hashing salt and starts the writer for
 // the lifetime of ctx.
-func StartRecorder(ctx context.Context, db *database.DB, logger *slog.Logger) (*Recorder, error) {
+func StartRecorder(
+	ctx context.Context,
+	db *database.DB,
+	internal InternalNetworks,
+	logger *slog.Logger,
+) (*Recorder, error) {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 	}
@@ -92,11 +151,12 @@ func StartRecorder(ctx context.Context, db *database.DB, logger *slog.Logger) (*
 		return nil, err
 	}
 	recorder := &Recorder{
-		events: make(chan TrafficEvent, trafficBuffer),
-		salt:   salt,
-		logger: logger,
-		now:    time.Now,
-		closed: make(chan struct{}),
+		events:   make(chan TrafficEvent, trafficBuffer),
+		salt:     salt,
+		logger:   logger,
+		now:      time.Now,
+		closed:   make(chan struct{}),
+		internal: internal,
 	}
 	go recorder.write(ctx, db)
 	return recorder, nil
@@ -209,6 +269,7 @@ func (r *Recorder) Record(request *http.Request, kind string, status int) {
 		ReferrerHost: referrerHost(request.Referer(), request.Host),
 		UserAgent:    userAgent,
 		IsCrawler:    isCrawler(userAgent),
+		IsInternal:   r.internal.Contains(clientIP(request)),
 	}
 	select {
 	case r.events <- event:

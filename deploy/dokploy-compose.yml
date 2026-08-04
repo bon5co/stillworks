@@ -17,6 +17,11 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       DEBUG: "false"
       PORT: "8000"
+      # Requests from here are our own work -- deploy checks, browser tests,
+      # the machine this is built on -- and are recorded but never counted.
+      # Without it the numbers that decide whether this project continues are
+      # mostly us checking that it is up.
+      INTERNAL_NETWORKS: "${INTERNAL_NETWORKS}"
     depends_on:
       stillworks-db:
         condition: service_healthy

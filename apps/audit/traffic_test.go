@@ -196,3 +196,51 @@ func TestCloseWaitsForTheWriterAndTimesOut(t *testing.T) {
 	var absent *Recorder
 	absent.Close(time.Second) // a management process has no recorder
 }
+
+func TestInternalNetworksMatchAddressesAndBlocks(t *testing.T) {
+	// The addresses this recognises decide which numbers the kill rule reads,
+	// so both directions are asserted: ours must match, everyone else must not.
+	networks := ParseInternalNetworks(" 106.73.62.0 , 10.0.0.0/8 , nonsense , ", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, address := range []string{"106.73.62.0", "10.4.5.6", "10.0.0.1"} {
+		if !networks.Contains(address) {
+			t.Errorf("Contains(%q) = false, want true", address)
+		}
+	}
+	for _, address := range []string{"106.73.62.1", "203.0.113.9", "", "not-an-address"} {
+		if networks.Contains(address) {
+			t.Errorf("Contains(%q) = true, want false", address)
+		}
+	}
+
+	// An empty setting must not accidentally match everything: that would zero
+	// the numbers rather than clean them.
+	empty := ParseInternalNetworks("", nil)
+	if empty.Contains("203.0.113.9") {
+		t.Fatal("an empty INTERNAL_NETWORKS matched a visitor")
+	}
+}
+
+func TestRecordMarksOurOwnRequests(t *testing.T) {
+	recorder := &Recorder{
+		events:   make(chan TrafficEvent, 4),
+		salt:     "test-salt",
+		now:      time.Now,
+		internal: ParseInternalNetworks("106.73.62.0", nil),
+	}
+	ours := httptest.NewRequest(http.MethodGet, "/llm/", nil)
+	ours.Header.Set("X-Forwarded-For", "106.73.62.0")
+	recorder.Record(ours, KindPage, http.StatusOK)
+
+	theirs := httptest.NewRequest(http.MethodGet, "/llm/", nil)
+	theirs.Header.Set("X-Forwarded-For", "203.0.113.9")
+	recorder.Record(theirs, KindPage, http.StatusOK)
+
+	first := <-recorder.events
+	second := <-recorder.events
+	if !first.IsInternal {
+		t.Error("our own request was recorded as a visitor")
+	}
+	if second.IsInternal {
+		t.Error("a visitor was recorded as internal")
+	}
+}
