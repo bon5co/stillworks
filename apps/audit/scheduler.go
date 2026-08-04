@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -17,23 +18,39 @@ import (
 // which is one for the providers whose published limits are tightest.
 const DefaultProbeInterval = time.Hour
 
-// SeedIfEmpty inserts the seeded claims when the table is empty. A fresh
-// deployment otherwise serves an honest but useless "nothing verified" page
-// until someone remembers to run a command by hand.
-func SeedIfEmpty(ctx context.Context, db *database.DB) error {
-	count, err := db.Bun().NewSelect().Model((*Endpoint)(nil)).Count(ctx)
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
+// SeedClaims inserts the seeded endpoint claims and refreshes the ones already
+// stored. It upserts rather than skipping a non-empty table, which is how the
+// key-required shelf came to be empty in production: the three new endpoints
+// shipped in the image, the deployment already held four rows, and the old
+// "only seed when empty" rule meant nothing was ever inserted. A whole shelf
+// was live, keyed, configured -- and blank.
+//
+// `active` is deliberately not overwritten. An operator who switched an
+// endpoint off did so for a reason, and a deploy is not an argument against it.
+func SeedClaims(ctx context.Context, db *database.DB) error {
 	for _, endpoint := range SeedEndpoints {
 		if _, err := db.Bun().NewInsert().
 			Model(&endpoint).
-			On("CONFLICT (slug) DO NOTHING").
+			On("CONFLICT (slug) DO UPDATE").
+			Set("provider = EXCLUDED.provider").
+			Set("base_url = EXCLUDED.base_url").
+			Set("chat_path = EXCLUDED.chat_path").
+			Set("models_path = EXCLUDED.models_path").
+			// auth_mode and key_env travel together: an endpoint moved between
+			// the shelves without its key variable would be probed bare and
+			// recorded as needing a key.
+			Set("auth_mode = EXCLUDED.auth_mode").
+			Set("key_env = EXCLUDED.key_env").
+			Set("chat_probes_per_cycle = EXCLUDED.chat_probes_per_cycle").
+			Set("docs_url = EXCLUDED.docs_url").
+			Set("notes = EXCLUDED.notes").
+			Set("openai_compatible = EXCLUDED.openai_compatible").
+			Set("image_path = EXCLUDED.image_path").
+			Set("image_mode = EXCLUDED.image_mode").
+			Set("image_models_path = EXCLUDED.image_models_path").
+			Set("updated_at = now()").
 			Exec(ctx); err != nil {
-			return err
+			return fmt.Errorf("seed %s: %w", endpoint.Slug, err)
 		}
 	}
 	return nil
@@ -129,7 +146,7 @@ func runOnce(ctx context.Context, db *database.DB, logger *slog.Logger) {
 	defer cancel()
 
 	started := time.Now()
-	if err := SeedIfEmpty(cycleCtx, db); err != nil {
+	if err := SeedClaims(cycleCtx, db); err != nil {
 		logger.Error("stillworks seed failed", "error", err)
 		return
 	}
