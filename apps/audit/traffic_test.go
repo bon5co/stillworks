@@ -9,6 +9,28 @@ import (
 	"time"
 )
 
+func TestClientIPPrefersCloudflareHeader(t *testing.T) {
+	// Traefik on Dokploy rewrites X-Forwarded-For to the Cloudflare PoP it can
+	// see, so trusting it merged every visitor behind one edge into a single
+	// identity. CF-Connecting-IP is the only header carrying the real client.
+	request := httptest.NewRequest(http.MethodGet, "/llm/", nil)
+	request.RemoteAddr = "10.0.0.7:54321"
+	request.Header.Set("X-Forwarded-For", "172.71.150.4")
+	request.Header.Set("CF-Connecting-IP", "106.73.62.0")
+	if got := clientIP(request); got != "106.73.62.0" {
+		t.Fatalf("clientIP = %q, want the Cloudflare-supplied client address", got)
+	}
+
+	// Without Cloudflare in front -- local development, or a direct hit on the
+	// origin -- the forwarded chain is still the best answer available.
+	direct := httptest.NewRequest(http.MethodGet, "/llm/", nil)
+	direct.RemoteAddr = "10.0.0.7:54321"
+	direct.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
+	if got := clientIP(direct); got != "203.0.113.9" {
+		t.Fatalf("clientIP = %q, want the leftmost forwarded address", got)
+	}
+}
+
 func TestClientIPPrefersForwardedHeader(t *testing.T) {
 	// Behind Traefik every RemoteAddr is the proxy. Getting this wrong does not
 	// error; it silently reports one visitor forever.

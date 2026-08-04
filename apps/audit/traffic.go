@@ -315,7 +315,23 @@ func (r *Recorder) visitorHash(ip, userAgent string) string {
 // clientIP reads the proxy headers because this runs behind Traefik on
 // Dokploy, where RemoteAddr is always the proxy and would collapse every
 // visitor into one.
+//
+// CF-Connecting-IP comes first because X-Forwarded-For is not trustworthy in
+// this deployment: the site sits behind Cloudflare, and Traefik does not trust
+// the edge as a proxy, so it rewrites X-Forwarded-For to the address it sees --
+// a Cloudflare PoP. Reading that header gave every visitor from one PoP the
+// same identity, which quietly under-counted visitors and was caught only
+// because our own requests refused to be recognised as ours.
+//
+// Cloudflare overwrites CF-Connecting-IP on every request it proxies, so a
+// client cannot forge it through the front door. It could be forged by
+// reaching the origin directly, which would let somebody label themselves
+// internal or split their own identity -- both harmless here, and neither
+// worth trading away a working visitor count for.
 func clientIP(request *http.Request) string {
+	if connecting := request.Header.Get("CF-Connecting-IP"); connecting != "" {
+		return strings.TrimSpace(connecting)
+	}
 	if forwarded := request.Header.Get("X-Forwarded-For"); forwarded != "" {
 		if first, _, found := strings.Cut(forwarded, ","); found {
 			return strings.TrimSpace(first)
