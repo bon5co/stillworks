@@ -22,6 +22,16 @@ services:
       # Without it the numbers that decide whether this project continues are
       # mostly us checking that it is up.
       INTERNAL_NETWORKS: "${INTERNAL_NETWORKS}"
+      # Free-tier keys for the key-required shelf. See README.md in this
+      # directory for where each one comes from and what happens without it.
+      #
+      # Each is optional and independent: an unset variable means that provider
+      # is not probed at all, which shows on the shelf as verdicts that were
+      # never established rather than as an outage. Leaving all three unset is
+      # a valid deployment -- it serves the keyless shelf exactly as before.
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     depends_on:
       stillworks-db:
         condition: service_healthy

@@ -10,17 +10,21 @@ import (
 	"github.com/bon5co/godjango/management"
 )
 
-// modelsPerCycle caps how many models one endpoint gets chat-probed per cycle.
-// llm7 alone lists 35; probing all of them hourly would be abuse of somebody
-// else's free service. Least-recently-checked wins, so coverage still rotates
-// through the whole list over a day.
-const modelsPerCycle = 3
+// defaultChatProbesPerCycle caps how many models one endpoint gets chat-probed
+// per cycle when it does not set its own. llm7 alone lists 35; probing all of
+// them hourly would be abuse of somebody else's free service.
+// Least-recently-checked wins, so coverage still rotates through the whole list
+// over a day.
+//
+// An endpoint whose provider publishes a tighter limit overrides this in its
+// seed row -- see Endpoint.ChatProbesPerCycle.
+const defaultChatProbesPerCycle = 3
 
 func Commands(services management.ProjectServices) []management.Command {
 	return []management.Command{
 		{
 			Name:    "seedllm",
-			Summary: "Insert or refresh the seeded keyless endpoint claims",
+			Summary: "Insert or refresh the seeded endpoint claims, both shelves",
 			Run: func(ctx context.Context, _ []string, streams management.Streams) error {
 				return withDatabase(ctx, services, func(db *database.DB) error {
 					for _, endpoint := range SeedEndpoints {
@@ -31,6 +35,12 @@ func Commands(services management.ProjectServices) []management.Command {
 							Set("base_url = EXCLUDED.base_url").
 							Set("chat_path = EXCLUDED.chat_path").
 							Set("models_path = EXCLUDED.models_path").
+							// auth_mode and key_env travel together: an endpoint
+							// moved between the shelves without its key variable
+							// would be probed bare and recorded as needing a key.
+							Set("auth_mode = EXCLUDED.auth_mode").
+							Set("key_env = EXCLUDED.key_env").
+							Set("chat_probes_per_cycle = EXCLUDED.chat_probes_per_cycle").
 							Set("docs_url = EXCLUDED.docs_url").
 							Set("notes = EXCLUDED.notes").
 							Set("openai_compatible = EXCLUDED.openai_compatible").
@@ -50,7 +60,7 @@ func Commands(services management.ProjectServices) []management.Command {
 		},
 		{
 			Name:    "probellm",
-			Summary: "Run one probe cycle over every active keyless endpoint",
+			Summary: "Run one probe cycle over every active endpoint we can reach",
 			Run: func(ctx context.Context, _ []string, streams management.Streams) error {
 				return withDatabase(ctx, services, func(db *database.DB) error {
 					return runCycle(ctx, db, streams.Out)
@@ -85,8 +95,9 @@ func withDatabase(
 	return body(db)
 }
 
-// runCycle is one polite pass: for each active endpoint, one models call, then
-// at most modelsPerCycle chat calls against the least recently checked models.
+// runCycle is one polite pass: for each active endpoint we hold what it needs
+// to call, one models call, then that endpoint's own budget of chat calls
+// against its least recently checked models.
 func runCycle(ctx context.Context, db *database.DB, out io.Writer) error {
 	var endpoints []Endpoint
 	if err := db.Bun().NewSelect().
@@ -102,6 +113,15 @@ func runCycle(ctx context.Context, db *database.DB, out io.Writer) error {
 
 	prober := NewProber()
 	for _, endpoint := range endpoints {
+		if !prober.CanProbe(endpoint) {
+			// A keyed endpoint whose key this deployment does not hold is
+			// skipped, and skipped means no row: not a probe, not an outcome,
+			// not a gap in a reliability record. Calling it anyway would earn a
+			// 401 and publish "this provider is down" when the only thing that
+			// is missing is one environment variable on our side.
+			fmt.Fprintf(out, "%-14s skipped      no key in %s\n", endpoint.Slug, endpoint.KeyEnv)
+			continue
+		}
 		probe, discovered := prober.ProbeModels(ctx, endpoint)
 		if err := insertProbe(ctx, db, probe); err != nil {
 			return err
@@ -122,7 +142,7 @@ func runCycle(ctx context.Context, db *database.DB, out io.Writer) error {
 			if err := insertProbe(ctx, db, chat); err != nil {
 				return err
 			}
-			if err := recordChatResult(ctx, db, candidate, chat); err != nil {
+			if err := recordChatResult(ctx, db, endpoint, candidate, chat); err != nil {
 				return err
 			}
 			fmt.Fprintf(out, "%-14s chat    %-12s %5dms  %s\n",
@@ -191,12 +211,15 @@ func chatCandidates(ctx context.Context, db *database.DB, endpoint Endpoint) ([]
 		Where("endpoint_id = ?", endpoint.ID).
 		Where("chat_capable").
 		// Never-checked first, then least recently checked. Models already
-		// proven to demand a key go last, but only for a week -- a provider
-		// that opens up a tier would otherwise never be noticed, which is the
-		// same staleness this project exists to attack, just pointed inward.
-		OrderExpr("((m.keyless IS FALSE) AND m.last_checked > now() - interval '7 days') ASC").
+		// proven to refuse us go last, but only for a week -- a provider that
+		// opens up a tier would otherwise never be noticed, which is the same
+		// staleness this project exists to attack, just pointed inward. Which
+		// column holds "refused us" depends on which call this endpoint gets;
+		// the name comes from a fixed method on Endpoint, never from input.
+		OrderExpr("((m." + endpoint.VerdictColumn() + " IS FALSE)" +
+			" AND m.last_checked > now() - interval '7 days') ASC").
 		OrderExpr("m.last_checked ASC NULLS FIRST").
-		Limit(modelsPerCycle).
+		Limit(endpoint.ChatProbesPerCycle()).
 		Scan(ctx)
 	if err != nil {
 		return nil, err
@@ -213,11 +236,22 @@ func chatCandidates(ctx context.Context, db *database.DB, endpoint Endpoint) ([]
 	return []Model{{EndpointID: endpoint.ID, ModelID: endpoint.DefaultModel}}, nil
 }
 
-func recordChatResult(ctx context.Context, db *database.DB, model Model, probe Probe) error {
+// recordChatResult writes what the chat probe settled, into the column that
+// belongs to the kind of call that was made. A keyed endpoint's success can
+// only ever set answered_with_key: writing keyless there would put a model that
+// needs a signup on a shelf whose heading promises it does not.
+func recordChatResult(
+	ctx context.Context,
+	db *database.DB,
+	endpoint Endpoint,
+	model Model,
+	probe Probe,
+) error {
 	if model.ID == 0 {
 		return nil // fallback candidate that was never discovered; nothing to update
 	}
 	now := time.Now()
+	verdict := endpoint.VerdictColumn()
 	update := db.Bun().NewUpdate().
 		Model((*Model)(nil)).
 		Set("last_checked = ?", now).
@@ -225,12 +259,15 @@ func recordChatResult(ctx context.Context, db *database.DB, model Model, probe P
 
 	switch probe.Outcome {
 	case OutcomeOK:
-		update = update.Set("keyless = ?", true).Set("last_ok = ?", now)
+		update = update.Set(verdict+" = ?", true).Set("last_ok = ?", now)
 	case OutcomeNeedsKey:
-		update = update.Set("keyless = ?", false)
+		// On the keyless shelf this is the provider closing the free door. On
+		// the keyed one it is our key being refused for this model, which is
+		// usually a model outside the free tier rather than anything wrong.
+		update = update.Set(verdict+" = ?", false)
 	default:
 		// Rate limited, timed out, 5xx: none of these say anything about whether
-		// a key is required, so the existing verdict stands rather than being
+		// the call is allowed, so the existing verdict stands rather than being
 		// overwritten with a guess.
 	}
 	_, err := update.Exec(ctx)

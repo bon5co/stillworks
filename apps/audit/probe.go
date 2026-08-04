@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -45,6 +46,11 @@ type Prober struct {
 	ImageClient *http.Client
 	UserAgent   string
 	Now         func() time.Time
+	// Keys reads our free-tier credential for a keyed endpoint, by environment
+	// variable name. It is a field rather than a direct os.Getenv call so a test
+	// can exercise the keyed path without putting a secret in the environment of
+	// the whole test binary.
+	Keys func(name string) string
 }
 
 func NewProber() *Prober {
@@ -53,7 +59,77 @@ func NewProber() *Prober {
 		ImageClient: &http.Client{Timeout: imageRequestTimeout},
 		UserAgent:   UserAgent,
 		Now:         time.Now,
+		Keys:        os.Getenv,
 	}
+}
+
+// KeyFor returns our credential for an endpoint, and whether we hold one.
+//
+// A keyless endpoint has none and needs none, so it reports false and the
+// request goes out bare -- which is the entire claim the first shelf makes.
+// A keyed endpoint whose variable is unset also reports false, and the caller's
+// job is then to skip it rather than to call it: an unauthenticated request to
+// a provider that requires a key would come back 401 and, recorded, would
+// publish "this provider demands a key" as though we had discovered something,
+// when all we had discovered is that our own deployment is misconfigured.
+func (p *Prober) KeyFor(endpoint Endpoint) (string, bool) {
+	if !endpoint.RequiresKey() || endpoint.KeyEnv == "" {
+		return "", false
+	}
+	reader := p.Keys
+	if reader == nil {
+		reader = os.Getenv
+	}
+	key := strings.TrimSpace(reader(endpoint.KeyEnv))
+	if key == "" {
+		return "", false
+	}
+	return key, true
+}
+
+// CanProbe reports whether we are in a position to ask this endpoint anything.
+// The only way to be told no is a keyed endpoint whose key we do not hold.
+func (p *Prober) CanProbe(endpoint Endpoint) bool {
+	if !endpoint.RequiresKey() {
+		return true
+	}
+	_, held := p.KeyFor(endpoint)
+	return held
+}
+
+// authorization is the header value for one endpoint, or empty for none. Every
+// request in this file goes through it, so "send the key" and "send nothing"
+// are decided in exactly one place from the endpoint's own auth mode rather
+// than at each call site.
+func (p *Prober) authorization(endpoint Endpoint) string {
+	key, held := p.KeyFor(endpoint)
+	if !held {
+		return ""
+	}
+	return "Bearer " + key
+}
+
+// redactKey removes our credential from anything about to be written down. The
+// probe log is public -- the raw table is on every endpoint page, and the whole
+// point of it is that a visitor can check our working -- so a provider that
+// echoes the offending key back inside a 401 body would otherwise publish it.
+// No provider we probe is known to do that; the cost of assuming none ever will
+// is one leaked key that can never be un-leaked.
+func redactKey(text, key string) string {
+	if key == "" || text == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, key, "[redacted]")
+}
+
+// scrub is the single exit through which a keyed probe's recorded text passes.
+func (p *Prober) scrub(endpoint Endpoint, probe Probe) Probe {
+	key, held := p.KeyFor(endpoint)
+	if !held {
+		return probe
+	}
+	probe.Error = redactKey(probe.Error, key)
+	return probe
 }
 
 // DiscoveredModel is a model id an endpoint says it offers.
@@ -86,8 +162,57 @@ func (p *Prober) now() time.Time {
 // wants to send more than a megabyte in answer to "ping" is not answering.
 const responseLimit = 1 << 20
 
-func (p *Prober) do(ctx context.Context, method, endpoint string, body []byte) (int, []byte, error) {
-	status, _, payload, _, err := p.doRaw(ctx, p.Client, method, endpoint, body, responseLimit)
+// do issues one probe request against an endpoint, authenticated exactly as
+// that endpoint's auth mode says. The endpoint is passed rather than a header,
+// so a call site cannot decide for itself whether to send a credential.
+func (p *Prober) do(
+	ctx context.Context,
+	endpoint Endpoint,
+	method, target string,
+	body []byte,
+) (int, []byte, error) {
+	status, _, payload, _, err := p.doRaw(
+		ctx, p.Client, p.credentialFor(endpoint, target), method, target, body, responseLimit)
+	return status, payload, err
+}
+
+// credentialFor is authorization narrowed to one destination. A path column may
+// hold an absolute URL -- Pollinations' image listing does, and OpenRouter's
+// model listing does because its query string is part of the question being
+// asked -- and an absolute URL can name any host at all. Sending our key
+// wherever a seed row points would turn one careless edit, or one row written
+// straight into the database, into a credential handed to a stranger.
+//
+// So the key travels only to the host the endpoint's own base URL names. A
+// mismatch drops the header rather than the request: the probe still happens,
+// it just goes out bare, and whatever answers is recorded honestly.
+func (p *Prober) credentialFor(endpoint Endpoint, target string) string {
+	if !sameHost(endpoint.BaseURL, target) {
+		return ""
+	}
+	return p.authorization(endpoint)
+}
+
+func sameHost(base, target string) bool {
+	parsedBase, baseErr := url.Parse(base)
+	parsedTarget, targetErr := url.Parse(target)
+	if baseErr != nil || targetErr != nil {
+		return false
+	}
+	return parsedBase.Host != "" && strings.EqualFold(parsedBase.Host, parsedTarget.Host)
+}
+
+// doUnauthenticated is the request path for everything that is not a probe: the
+// visitor-triggered test call. It takes no endpoint at all, so our key cannot
+// reach it however the route above it is later rewritten. Handing a visitor a
+// call made on our credential would be free inference on our quota, dressed as
+// a measurement of what they can reach.
+func (p *Prober) doUnauthenticated(
+	ctx context.Context,
+	method, target string,
+	body []byte,
+) (int, []byte, error) {
+	status, _, payload, _, err := p.doRaw(ctx, p.Client, "", method, target, body, responseLimit)
 	return status, payload, err
 }
 
@@ -98,6 +223,7 @@ func (p *Prober) do(ctx context.Context, method, endpoint string, body []byte) (
 func (p *Prober) doRaw(
 	ctx context.Context,
 	client *http.Client,
+	authorization string,
 	method, endpoint string,
 	body []byte,
 	limit int64,
@@ -115,8 +241,12 @@ func (p *Prober) doRaw(
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	// Deliberately no Authorization header, ever. The entire claim under test is
-	// that this works without one.
+	// The header goes on only when the caller resolved one from the endpoint's
+	// auth mode, which for a keyless endpoint it never can. The keyless shelf's
+	// entire claim is that these requests carry nothing.
+	if authorization != "" {
+		request.Header.Set("Authorization", authorization)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return 0, nil, nil, false, err
@@ -137,6 +267,13 @@ func (p *Prober) doRaw(
 // between needs_key and everything else is the point of the whole project: a
 // provider that quietly started demanding a key is still "up", and every other
 // list will keep showing it as free.
+//
+// The outcome names are the same on both shelves and mean the same thing about
+// the reply, but not the same thing about the world. On a keyless endpoint a
+// needs_key says the free door closed. On a keyed one it says the key we sent
+// was refused for that model -- a model outside our free tier, or a key that
+// has been revoked. Which reading applies is a property of the endpoint, so it
+// is resolved where the endpoint is known rather than guessed at here.
 func classify(status int, body []byte, err error) string {
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
@@ -237,8 +374,13 @@ func joinURL(base, path string) string {
 }
 
 // ProbeModels asks an endpoint what it offers. One request, no retry.
+//
+// On a keyed endpoint the listing is what the free tier shows *our* account.
+// Providers do gate model lists by plan, so this is the honest reading of it
+// and the reason the keyed shelf says "our key" everywhere rather than "free".
 func (p *Prober) ProbeModels(ctx context.Context, endpoint Endpoint) (Probe, []DiscoveredModel) {
-	return p.probeListing(ctx, endpoint, endpoint.ModelsPath, KindModels)
+	probe, discovered := p.probeListing(ctx, endpoint, endpoint.ModelsPath, KindModels)
+	return p.scrub(endpoint, probe), discovered
 }
 
 // ProbeImageModels reads a separate image model listing where the provider
@@ -261,7 +403,7 @@ func (p *Prober) ProbeImageModels(ctx context.Context, endpoint Endpoint) (Probe
 		// listings must not have its chat verdict erased by the second read.
 		discovered[index].FromImageListing = true
 	}
-	return probe, discovered
+	return p.scrub(endpoint, probe), discovered
 }
 
 func (p *Prober) probeListing(
@@ -270,7 +412,7 @@ func (p *Prober) probeListing(
 	path, kind string,
 ) (Probe, []DiscoveredModel) {
 	started := p.now()
-	status, payload, err := p.do(ctx, http.MethodGet, joinURL(endpoint.BaseURL, path), nil)
+	status, payload, err := p.do(ctx, endpoint, http.MethodGet, joinURL(endpoint.BaseURL, path), nil)
 	probe := Probe{
 		EndpointID: endpoint.ID,
 		StartedAt:  started,
@@ -355,28 +497,59 @@ type modelEntry struct {
 		Input  []string `json:"input"`
 		Output []string `json:"output"`
 	} `json:"modalities"`
+	// OpenRouter nests it two levels down, under architecture. Reading it
+	// matters more there than anywhere else: that listing is the largest we
+	// take and the only one where guessing from the name has to cover music
+	// and speech models alongside chat ones.
+	Architecture struct {
+		InputModes  []string `json:"input_modalities"`
+		OutputModes []string `json:"output_modalities"`
+	} `json:"architecture"`
 	Tools        *bool `json:"tools"`
 	Vision       *bool `json:"vision"`
 	JSONMode     *bool `json:"json_mode"`
 	Capabilities *struct {
-		Tools    *bool `json:"tools"`
-		Vision   *bool `json:"vision"`
-		JSONMode *bool `json:"json_mode"`
+		Tools  *bool `json:"tools"`
+		Vision *bool `json:"vision"`
+		// Mistral spells the same two things differently and adds the one
+		// question the name heuristic keeps getting wrong: whether the model
+		// serves chat at all. Its listing carries embeddings, OCR, moderation
+		// and Voxtral audio models beside the chat ones, and only
+		// completion_chat separates them reliably.
+		FunctionCalling *bool `json:"function_calling"`
+		CompletionChat  *bool `json:"completion_chat"`
+		JSONMode        *bool `json:"json_mode"`
 	} `json:"capabilities"`
+	// Some providers publish capabilities as a list of names rather than
+	// booleans: Groq ships supported_features ["tools","json_mode"], OpenRouter
+	// ships supported_parameters with "tools" and "structured_outputs" among
+	// the sampling knobs. Only presence is read as a claim -- absence from a
+	// list is not the provider saying no, and recording it as one would put a
+	// false "claimed: no" beside our own measurement.
+	SupportedFeatures   []string `json:"supported_features"`
+	SupportedParameters []string `json:"supported_parameters"`
 }
 
 func (entry modelEntry) inputModes() []string {
-	if len(entry.InputModes) > 0 {
+	switch {
+	case len(entry.InputModes) > 0:
 		return entry.InputModes
+	case len(entry.Modalities.Input) > 0:
+		return entry.Modalities.Input
+	default:
+		return entry.Architecture.InputModes
 	}
-	return entry.Modalities.Input
 }
 
 func (entry modelEntry) outputModes() []string {
-	if len(entry.OutputModes) > 0 {
+	switch {
+	case len(entry.OutputModes) > 0:
 		return entry.OutputModes
+	case len(entry.Modalities.Output) > 0:
+		return entry.Modalities.Output
+	default:
+		return entry.Architecture.OutputModes
 	}
-	return entry.Modalities.Output
 }
 
 // claims reads the provider's own capability statements. json_mode is recorded
@@ -396,8 +569,14 @@ func (entry modelEntry) claims() map[string]bool {
 	record(CapabilityJSONObject, entry.JSONMode)
 	if entry.Capabilities != nil {
 		record(CapabilityTools, entry.Capabilities.Tools)
+		record(CapabilityTools, entry.Capabilities.FunctionCalling)
 		record(CapabilityVision, entry.Capabilities.Vision)
 		record(CapabilityJSONObject, entry.Capabilities.JSONMode)
+	}
+	for capability, present := range listedFeatures(entry) {
+		if present {
+			claimed[capability] = true
+		}
 	}
 	if entry.ModelType == "image" || containsMode(entry.outputModes(), "image") {
 		claimed[CapabilityImageOut] = true
@@ -406,6 +585,36 @@ func (entry modelEntry) claims() map[string]bool {
 		return nil
 	}
 	return claimed
+}
+
+// featureNames maps the names providers use in their capability lists onto the
+// capabilities we publish a verdict for. json_mode and structured_outputs are
+// deliberately different entries: the first is "will emit some JSON", the
+// second is "will hold a schema", and llm7 already proved those come apart.
+var featureNames = map[string]string{
+	"tools":              CapabilityTools,
+	"tool_choice":        CapabilityTools,
+	"function_calling":   CapabilityTools,
+	"json_mode":          CapabilityJSONObject,
+	"response_format":    CapabilityJSONObject,
+	"structured_outputs": CapabilityJSONSchema,
+	"json_schema":        CapabilityJSONSchema,
+	"vision":             CapabilityVision,
+}
+
+// listedFeatures reads the array-shaped claims. Only presence is returned:
+// these lists mix capabilities with sampling parameters, so what is missing
+// from one says nothing at all.
+func listedFeatures(entry modelEntry) map[string]bool {
+	found := map[string]bool{}
+	for _, list := range [][]string{entry.SupportedFeatures, entry.SupportedParameters} {
+		for _, name := range list {
+			if capability, known := featureNames[strings.ToLower(strings.TrimSpace(name))]; known {
+				found[capability] = true
+			}
+		}
+	}
+	return found
 }
 
 func collect(entries []modelEntry) []DiscoveredModel {
@@ -434,12 +643,16 @@ func collect(entries []modelEntry) []DiscoveredModel {
 	return out
 }
 
-// entryChatCapable prefers the provider's own type label over anything we can
-// infer. llm7 labels each model chat, image or video, which settles the
-// question that the name heuristic only guesses at.
+// entryChatCapable prefers the provider's own statement over anything we can
+// infer. llm7 labels each model chat, image or video and Mistral publishes a
+// completion_chat boolean, both of which settle the question that the name
+// heuristic only guesses at.
 func entryChatCapable(entry modelEntry, id string, input, output []string) bool {
 	if entry.ModelType != "" {
 		return entry.ModelType == "chat"
+	}
+	if entry.Capabilities != nil && entry.Capabilities.CompletionChat != nil {
+		return *entry.Capabilities.CompletionChat
 	}
 	return chatCapable(id, input, output)
 }
@@ -486,6 +699,11 @@ func containsMode(modes []string, want string) bool {
 // ProbeChat asks one model for a handful of tokens. One request, no retry: a
 // 429 is recorded and left alone, because retrying a rate limit is how you stop
 // being welcome.
+//
+// On a keyed endpoint the request carries our key, so a 200 proves the model
+// answers *us*. What the caller does with that -- and specifically that it must
+// never be written to the keyless column -- is decided by the endpoint's
+// VerdictColumn, not here.
 func (p *Prober) ProbeChat(ctx context.Context, endpoint Endpoint, model string) Probe {
 	started := p.now()
 	body, err := chatBody(endpoint, model)
@@ -498,19 +716,20 @@ func (p *Prober) ProbeChat(ctx context.Context, endpoint Endpoint, model string)
 	if err != nil {
 		probe.Outcome = OutcomeBadBody
 		probe.Error = err.Error()
-		return probe
+		return p.scrub(endpoint, probe)
 	}
-	status, payload, err := p.do(ctx, http.MethodPost, joinURL(endpoint.BaseURL, endpoint.ChatPath), body)
+	status, payload, err := p.do(
+		ctx, endpoint, http.MethodPost, joinURL(endpoint.BaseURL, endpoint.ChatPath), body)
 	probe.HTTPStatus = status
 	probe.LatencyMS = int(p.now().Sub(started).Milliseconds())
 	probe.Outcome = classify(status, payload, err)
 	if err != nil {
 		probe.Error = err.Error()
-		return probe
+		return p.scrub(endpoint, probe)
 	}
 	if probe.Outcome != OutcomeOK {
 		probe.Error = firstLine(payload)
-		return probe
+		return p.scrub(endpoint, probe)
 	}
 	answer, parseErr := parseCompletion(payload)
 	if parseErr != nil || !answer.Served {
@@ -523,10 +742,10 @@ func (p *Prober) ProbeChat(ctx context.Context, endpoint Endpoint, model string)
 		} else {
 			probe.Error = "200 with no completion in the body"
 		}
-		return probe
+		return p.scrub(endpoint, probe)
 	}
 	probe.CompletionChars = len(strings.TrimSpace(answer.Content))
-	return probe
+	return p.scrub(endpoint, probe)
 }
 
 func chatBody(endpoint Endpoint, model string) ([]byte, error) {

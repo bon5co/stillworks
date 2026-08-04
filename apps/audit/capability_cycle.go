@@ -79,6 +79,13 @@ func runCapabilityCycle(ctx context.Context, db *database.DB, out io.Writer, pau
 
 	prober := NewProber()
 	for _, endpoint := range endpoints {
+		if !prober.CanProbe(endpoint) {
+			// Same rule as the liveness cycle: no key, no call, no row. The
+			// verdicts stay NULL and read as "never verified", which is what
+			// they are.
+			fmt.Fprintf(out, "%-14s skipped      no key in %s\n", endpoint.Slug, endpoint.KeyEnv)
+			continue
+		}
 		// Each endpoint gets its own budget and its own error boundary.
 		// Endpoints are visited in a fixed order, so an endpoint that eats the
 		// whole cycle -- eight image generations at three minutes each would --
@@ -128,7 +135,7 @@ func probeEndpointCapabilities(
 		if err := insertProbe(ctx, db, result.Probe); err != nil {
 			return err
 		}
-		if err := recordCapabilityResult(ctx, db, candidate, result); err != nil {
+		if err := recordCapabilityResult(ctx, db, endpoint, candidate, result); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "%-14s %-12s %-12s %5dms  %-8s %s\n",
@@ -234,12 +241,11 @@ func capabilityKey(modelRowID int64, capability string) string {
 // it only about drawing would lose the other four answers.
 func applicableCapabilities(endpoint Endpoint, model Model) []string {
 	var capabilities []string
-	// A model that has not answered a keyless chat call is not asked about its
-	// features: the answer would be a 401 for every capability, and recording
-	// four of those a day against somebody's paid tier is just noise on their
-	// logs and ours.
-	verifiedKeyless := model.Keyless != nil && *model.Keyless
-	if endpoint.OpenAICompatible && model.ChatCapable && verifiedKeyless {
+	// A model that has not yet answered the kind of chat call this endpoint
+	// gets is not asked about its features: the answer would be a 401 for every
+	// capability, and recording four of those a day against a tier we cannot
+	// reach is just noise on the provider's logs and ours.
+	if endpoint.OpenAICompatible && model.ChatCapable && model.Verified(endpoint) {
 		capabilities = append(capabilities, ChatCapabilities...)
 	}
 	if endpoint.ImageMode != "" && producesImages(model) {
@@ -271,6 +277,7 @@ func producesImages(model Model) bool {
 func recordCapabilityResult(
 	ctx context.Context,
 	db *database.DB,
+	endpoint Endpoint,
 	candidate capabilityCandidate,
 	result capabilityResult,
 ) error {
@@ -295,7 +302,7 @@ func recordCapabilityResult(
 		return fmt.Errorf("record capability %s for model %d: %w",
 			candidate.Capability, candidate.Model.ID, err)
 	}
-	return recordKeylessSideEffect(ctx, db, candidate, result.Probe)
+	return recordReachabilitySideEffect(ctx, db, endpoint, candidate, result.Probe)
 }
 
 // capabilityUpdates lists the columns a result is allowed to overwrite. It is a
@@ -316,36 +323,42 @@ func capabilityUpdates(result capabilityResult) []string {
 	return updates
 }
 
-// recordKeylessSideEffect uses what a capability probe incidentally proved. A
-// request that carried no Authorization header and got an answer is evidence of
-// keylessness whatever it was asking about, and for an image model it is the
-// only evidence there will ever be: image models are never chat-probed, so
-// without this their keyless verdict would stay NULL forever while their
-// image_out verdict said yes.
+// recordReachabilitySideEffect uses what a capability probe incidentally
+// proved. A request that got an answer is evidence that the model answers the
+// kind of call this endpoint gets, whatever the request was asking about, and
+// for an image model it is the only evidence there will ever be: image models
+// are never chat-probed, so without this their verdict would stay NULL forever
+// while their image_out verdict said yes.
 //
-// A key demand only counts against the model's own surface. Image generation
-// lives on a different route from chat -- OVH serves /v1/images/generations and
+// The verdict goes into the column that matches the call that was made, for the
+// same reason recordChatResult's does. A capability probe against a keyed
+// endpoint carried our key, so all it can prove is that our key works.
+//
+// A refusal only counts against the model's own surface. Image generation lives
+// on a different route from chat -- OVH serves /v1/images/generations and
 // /v1/chat/completions separately -- so a gated images route must not pull a
-// model off the shelf whose chat surface answers without a key.
+// model off the shelf whose chat surface answers.
 //
 // last_checked is deliberately not touched. It orders the hourly chat rotation,
 // and moving it here would let the daily cycle starve models of liveness checks.
-func recordKeylessSideEffect(
+func recordReachabilitySideEffect(
 	ctx context.Context,
 	db *database.DB,
+	endpoint Endpoint,
 	candidate capabilityCandidate,
 	probe Probe,
 ) error {
 	update := db.Bun().NewUpdate().Model((*Model)(nil)).Where("m.id = ?", candidate.Model.ID)
+	verdict := endpoint.VerdictColumn()
 	now := time.Now()
 	switch probe.Outcome {
 	case OutcomeOK:
-		update = update.Set("keyless = ?", true).Set("last_ok = ?", now)
+		update = update.Set(verdict+" = ?", true).Set("last_ok = ?", now)
 	case OutcomeNeedsKey:
 		if candidate.Capability == CapabilityImageOut && candidate.Model.ChatCapable {
 			return nil
 		}
-		update = update.Set("keyless = ?", false)
+		update = update.Set(verdict+" = ?", false)
 	default:
 		return nil
 	}

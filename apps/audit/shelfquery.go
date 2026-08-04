@@ -88,6 +88,13 @@ var workingSorts = map[string]sortColumn{
 }
 
 // endpointSorts covers the "Every endpoint we track" table.
+//
+// The "keyless" key is a sort key, not a claim. Both shelves sort by the count
+// of models that answered them, and on the keyed shelf that column is headed
+// "Answered our key". The parameter keeps its original spelling so links to the
+// keyless shelf that people have already shared keep working; renaming it would
+// break those to make a URL read slightly better on a page that states the
+// difference in three other places.
 var endpointSorts = map[string]sortColumn{
 	"endpoint": {
 		ascending:    "slug ASC",
@@ -138,6 +145,27 @@ type ShelfQuery struct {
 	Endpoint string
 	Search   string
 	Keyless  string
+	// Base is the path this state belongs to, so the same sort and filter
+	// machinery serves both shelves without either one linking into the other.
+	// It is set by the route from a constant and never read from the query
+	// string: a URL that could redirect its own controls to the other shelf is
+	// the blurring these two pages exist to prevent.
+	Base string
+}
+
+// On returns the same state anchored to a shelf path.
+func (query ShelfQuery) On(base string) ShelfQuery {
+	query.Base = base
+	return query
+}
+
+// basePath falls back to the keyless shelf, which is where this machinery lived
+// before there were two of them.
+func (query ShelfQuery) basePath() string {
+	if query.Base == "" {
+		return keylessShelfPath
+	}
+	return query.Base
 }
 
 // ParseShelfQuery reads the query string and discards anything it does not
@@ -257,9 +285,9 @@ func (query ShelfQuery) values() url.Values {
 func (query ShelfQuery) URL() string {
 	encoded := query.values().Encode()
 	if encoded == "" {
-		return "/llm/"
+		return query.basePath()
 	}
-	return "/llm/?" + encoded
+	return query.basePath() + "?" + encoded
 }
 
 // WorkingSortLink is the address a column header points at: sort by this key,

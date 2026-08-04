@@ -9,13 +9,14 @@ import (
 templ header() {
 	<div class="shelf-nav muted">
 		<a href="/">stillworks</a>
-		<a href="/llm/">free LLM endpoints</a>
+		<a href="/llm/">keyless LLM endpoints</a>
+		<a href="/llm/keyed/">free tier, key required</a>
 		<a href="/mcp/">MCP servers</a>
 		<a href="/stats">our traffic</a>
 	</div>
 }
 
-templ HomePage(working []WorkingModel, checked *time.Time) {
+templ HomePage(working []WorkingModel, keyed []WorkingModel, checked *time.Time, keyedChecked *time.Time) {
 	<div class="sw">
 		@header()
 		<h1>Directories list. We check.</h1>
@@ -34,6 +35,22 @@ templ HomePage(working []WorkingModel, checked *time.Time) {
 			. <a href="/llm/">See the shelf</a>, or ask the API:
 		</p>
 		<pre>curl https://stillworks.supercapybara.com/api/llm/up</pre>
+		<h2>Free tier, key required</h2>
+		<p>
+			{ fmt.Sprintf("%d model(s)", len(keyed)) } on providers whose free tier needs a key, answering
+			our own free-tier key
+			if keyedChecked != nil {
+				<span class="when">, last confirmed { humanWhen(*keyedChecked) }</span>
+			}
+			. These carry the same record of what happened and when — but a call that works on our key
+			is a weaker claim than one that works on no key, and the two are never mixed.
+			<a href="/llm/keyed/">See that shelf</a>, or opt in:
+		</p>
+		<pre>curl 'https://stillworks.supercapybara.com/api/llm/up?auth=key'</pre>
+		<p class="muted">
+			The plain <code>/api/llm/up</code> above returns keyless endpoints and nothing else. It
+			always will: callers wrote that URL down when it was the only shelf here.
+		</p>
 		<h2>MCP servers</h2>
 		<p class="muted">Not open yet. The LLM shelf ships first and has to earn its keep before the second one starts.</p>
 	</div>
@@ -61,8 +78,8 @@ templ endpointHeader(query ShelfQuery, key string, label string) {
 // shelfFilters is a plain GET form. The current sort travels in hidden fields
 // because a form submits only its own inputs, and losing the sort on every
 // filter change is the kind of small betrayal that makes a control feel broken.
-templ shelfFilters(query ShelfQuery, slugs []string) {
-	<form class="filters" method="get" action="/llm/">
+templ shelfFilters(query ShelfQuery, slugs []string, auth string) {
+	<form class="filters" method="get" action={ templ.SafeURL(shelfPathFor(auth)) }>
 		<label>
 			Endpoint
 			<select name="endpoint">
@@ -77,14 +94,14 @@ templ shelfFilters(query ShelfQuery, slugs []string) {
 			<input type="search" name="q" value={ query.Search } placeholder="gpt, llama, mistral"/>
 		</label>
 		// This one only narrows the endpoint table below. The table above is
-		// keyless by definition, so a filter that could widen it would make the
+		// verified by definition, so a filter that could widen it would make the
 		// same heading mean two different things.
 		<label>
 			Endpoints (below)
 			<select name="keyless">
 				<option value="" selected?={ query.Keyless == "" }>either way</option>
-				<option value="yes" selected?={ query.Keyless == "yes" }>has a keyless model</option>
-				<option value="no" selected?={ query.Keyless == "no" }>none verified keyless</option>
+				<option value="yes" selected?={ query.Keyless == "yes" }>{ "has a model that answered " + answeredHow(auth) }</option>
+				<option value="no" selected?={ query.Keyless == "no" }>{ "none verified " + answeredHow(auth) }</option>
 			</select>
 		</label>
 		<input type="hidden" name="sort" value={ query.WorkingSort }/>
@@ -98,30 +115,75 @@ templ shelfFilters(query ShelfQuery, slugs []string) {
 	</form>
 }
 
+// ShelfPage renders either shelf. One component rather than two because the
+// tables, sorting and filtering are identical machinery -- but every sentence
+// that makes a claim is chosen by the auth mode, because the claims are not
+// identical at all and a shared page that read the same on both would be worse
+// than no second shelf.
 templ ShelfPage(
 	rows []ShelfRow,
 	working []WorkingModel,
 	drawing []WorkingModel,
 	query ShelfQuery,
 	slugs []string,
+	auth string,
+	configured bool,
 ) {
 	<div class="sw">
 		@header()
-		<h1>Free LLM endpoints</h1>
-		<p class="tag">Keyless only. A free tier that wants a signup belongs on somebody else's list.</p>
-		<p class="muted">
-			Verified from this server's IP address. Keyless quotas are usually per-IP, so an
-			endpoint that answers here can still return 402 or 429 from yours — which is why the
-			<strong>Worked</strong> column is worth more than the last green tick, and why every
-			row has a <strong>Test</strong> button that calls it from <em>your</em> address.
-		</p>
-		@shelfFilters(query, slugs)
+		if auth == AuthModeKey {
+			<h1>Free tier, key required</h1>
+			<p class="tag">
+				These need an API key. They are here because we re-probe them and publish what
+				happened — not because they are free to call without signing up.
+			</p>
+			<p class="warn">
+				Every result on this page was produced by a call carrying <strong>our own</strong>
+				free-tier key, from this server's address. It proves the endpoint answered our
+				account at the time shown. It is <strong>not</strong> a measurement of what your
+				signup's free tier includes, what quota you get, or whether the provider is still
+				handing out free accounts. We cannot measure any of that for you.
+			</p>
+			<p class="muted">
+				Looking for endpoints that need no key and no signup at all? That is the
+				<a href="/llm/">keyless shelf</a>, and it is the one this site is really about.
+			</p>
+		} else {
+			<h1>Free LLM endpoints</h1>
+			<p class="tag">Keyless only. No key, no signup, nothing to sign up for.</p>
+			<p class="muted">
+				Verified from this server's IP address, by calls carrying no Authorization header at
+				all. Keyless quotas are usually per-IP, so an endpoint that answers here can still
+				return 402 or 429 from yours — which is why the <strong>Worked</strong> column is
+				worth more than the last green tick, and why every row has a <strong>Test</strong>
+				button that calls it from <em>your</em> address.
+			</p>
+			<p class="muted">
+				Providers whose free tier wants a key are on a
+				<a href="/llm/keyed/">separate shelf</a>, kept separate on purpose.
+			</p>
+		}
+		@shelfFilters(query, slugs, auth)
 		<h2>Working right now</h2>
 		if len(working) == 0 {
 			if query.Filtered() {
-				<p class="muted">No verified keyless model matches that filter. <a href="/llm/">Show every one.</a></p>
+				<p class="muted">
+					{ "No verified model matches that filter. " }
+					<a href={ templ.SafeURL(shelfPathFor(auth)) }>Show every one.</a>
+				</p>
+			} else if !configured {
+				// Not a fact about the providers. This instance holds no key
+				// for anything on this shelf, so it has not called them, and
+				// saying "nothing is verified" would blame somebody else's
+				// service for our own missing configuration.
+				<p class="warn">
+					This instance holds no API key for any provider on this shelf, so it has not called
+					any of them. Nothing here is a statement about whether those providers are working.
+				</p>
 			} else {
-				<p class="muted">Nothing is currently verified as keyless. That is a real answer, not a loading state.</p>
+				<p class="muted">
+					{ "Nothing on this shelf is currently verified " + answeredHow(auth) + ". That is a real answer, not a loading state." }
+				</p>
 			}
 		} else {
 			<div class="scroll">
@@ -135,7 +197,9 @@ templ ShelfPage(
 							@workingHeader(query, "latency", "Latency")
 							@workingHeader(query, "reliability", "Worked")
 							@workingHeader(query, "verified", "Verified")
-							<th>Test</th>
+							if auth != AuthModeKey {
+								<th>Test</th>
+							}
 						</tr>
 					</thead>
 					<tbody>
@@ -150,9 +214,15 @@ templ ShelfPage(
 								<td class="when">{ latency(model.LatencyMS) }</td>
 								<td class="when">{ reliability(model.Successes, model.Attempts) }</td>
 								<td class="when">{ humanWhenPtr(model.LastOK) }</td>
-								<td>
-									@tryForm(model)
-								</td>
+								// The test button is keyless-only. On this shelf the
+								// call could only be made on our key, which would be
+								// free inference handed out on our quota and would
+								// prove nothing the row does not already say.
+								if auth != AuthModeKey {
+									<td>
+										@tryForm(model)
+									</td>
+								}
 							</tr>
 						}
 					</tbody>
@@ -167,13 +237,20 @@ templ ShelfPage(
 				The feature columns are folded away at this width. Open an endpoint to see the
 				full matrix, or ask the API.
 			</p>
-			<pre>curl 'https://stillworks.supercapybara.com/api/llm/up?feature=tools,json_schema'</pre>
+			<pre>{ featureQueryExample(auth) }</pre>
 			<h2>Call one</h2>
+			if auth == AuthModeKey {
+				<p class="muted">
+					With your own key from that provider. Ours is never rendered on this site, returned
+					by its API, or written into its database — it lives in the deployment's environment
+					and goes out on probes only.
+				</p>
+			}
 			<pre>{ snippet(working[0]) }</pre>
 		}
 		<h2>Image generation</h2>
 		if len(drawing) == 0 {
-			<p class="muted">No keyless image endpoint is currently verified.</p>
+			<p class="muted">{ "No image endpoint on this shelf is currently verified " + answeredHow(auth) + "." }</p>
 		} else {
 			<table>
 				<thead>
@@ -197,7 +274,10 @@ templ ShelfPage(
 		}
 		<h2>Every endpoint we track</h2>
 		if len(rows) == 0 {
-			<p class="muted">No tracked endpoint matches that filter. <a href="/llm/">Show every one.</a></p>
+			<p class="muted">
+				{ "No tracked endpoint on this shelf matches that filter. " }
+				<a href={ templ.SafeURL(shelfPathFor(auth)) }>Show every one.</a>
+			</p>
 		} else {
 			<div class="scroll">
 				<table>
@@ -206,8 +286,13 @@ templ ShelfPage(
 							@endpointHeader(query, "endpoint", "Endpoint")
 							<th>Last result</th>
 							@endpointHeader(query, "listed", "Models listed")
-							@endpointHeader(query, "keyless", "Keyless")
-							<th>Key required</th>
+							if auth == AuthModeKey {
+								@endpointHeader(query, "keyless", "Answered our key")
+								<th>Refused our key</th>
+							} else {
+								@endpointHeader(query, "keyless", "Keyless")
+								<th>Key required</th>
+							}
 							@endpointHeader(query, "checked", "Checked")
 						</tr>
 					</thead>
@@ -263,6 +348,15 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 				— <a href={ templ.SafeURL(row.DocsURL) } rel="nofollow noopener">docs</a>
 			}
 		</p>
+		if row.RequiresKey() {
+			<p class="warn">
+				This provider requires an API key. Every row below was measured with stillworks' own
+				free-tier key, from this server's address, at the time shown. That says the endpoint
+				answered <em>our</em> account — it says nothing about what a new signup's free tier
+				includes, and we have no way to measure that for you. Our key is never shown here,
+				returned by the API, or stored in the database.
+			</p>
+		}
 		if row.Notes != "" {
 			<p class="lede muted">{ row.Notes }</p>
 		}
@@ -271,7 +365,13 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 			<table>
 				<thead>
 					<tr>
-						<th>Model</th><th>Tier</th><th>Keyless</th><th>Chat</th>
+						<th>Model</th><th>Tier</th>
+						if row.RequiresKey() {
+							<th>Answers our key</th>
+						} else {
+							<th>Keyless</th>
+						}
+						<th>Chat</th>
 						<th>Tools</th><th>Schema</th><th>JSON</th><th>Vision</th><th>Images</th>
 						<th>Worked</th><th>Last checked</th><th>Last listed</th>
 					</tr>
@@ -281,7 +381,7 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 						<tr>
 							<td><code>{ model.ModelID }</code></td>
 							<td class="muted">{ orDash(model.Tier) }</td>
-							<td>{ keylessLabel(model.Keyless) }</td>
+							<td>{ verdictLabel(model.Verdict(row.RequiresKey()), row.RequiresKey()) }</td>
 							<td class="muted">
 								if model.ChatCapable {
 									yes
@@ -307,24 +407,31 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 		</p>
 		<h2>Raw probe log</h2>
 		<p class="muted">Our working, so you can check it rather than trust it.</p>
-		<table>
-			<thead>
-				<tr><th>When</th><th>Kind</th><th>Outcome</th><th>HTTP</th><th>Latency</th><th>Model</th><th>Detail</th></tr>
-			</thead>
-			<tbody>
-				for _, probe := range probes {
-					<tr>
-						<td class="when">{ humanWhen(probe.StartedAt) }</td>
-						<td>{ probe.Kind }</td>
-						<td><span class={ outcomeClass(probe.Outcome) }>{ probe.Outcome }</span></td>
-						<td>{ statusLabel(probe.HTTPStatus) }</td>
-						<td class="when">{ latency(probe.LatencyMS) }</td>
-						<td><code>{ orDash(probe.ModelUsed) }</code></td>
-						<td class="muted">{ truncate(probe.Error, 90) }</td>
-					</tr>
-				}
-			</tbody>
-		</table>
+		// Wrapped like the models table above it. Without this the detail column
+		// -- which quotes the provider's own error back -- pushes the whole
+		// document wider than a phone screen, so every page on the site scrolls
+		// sideways rather than this one table doing it. It was already true of
+		// every endpoint page before the second shelf existed.
+		<div class="scroll">
+			<table>
+				<thead>
+					<tr><th>When</th><th>Kind</th><th>Outcome</th><th>HTTP</th><th>Latency</th><th>Model</th><th>Detail</th></tr>
+				</thead>
+				<tbody>
+					for _, probe := range probes {
+						<tr>
+							<td class="when">{ humanWhen(probe.StartedAt) }</td>
+							<td>{ probe.Kind }</td>
+							<td><span class={ outcomeClass(probe.Outcome) }>{ probe.Outcome }</span></td>
+							<td>{ statusLabel(probe.HTTPStatus) }</td>
+							<td class="when">{ latency(probe.LatencyMS) }</td>
+							<td><code>{ orDash(probe.ModelUsed) }</code></td>
+							<td class="muted">{ truncate(probe.Error, 90) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
 	</div>
 }
 
@@ -562,14 +669,44 @@ func outcomeClass(outcome string) string {
 	}
 }
 
-func keylessLabel(keyless *bool) string {
-	if keyless == nil {
+// verdictLabel words the same tri-state for both shelves. The words differ
+// because the fact differs: "yes" on the keyless shelf means anybody can call
+// it, and on the keyed shelf it means our key was accepted.
+func verdictLabel(verdict *bool, requiresKey bool) string {
+	switch {
+	case verdict == nil:
 		return "not yet checked"
-	}
-	if *keyless {
+	case *verdict && requiresKey:
+		return "yes, on our key"
+	case *verdict:
 		return "yes"
+	case requiresKey:
+		return "refused our key"
+	default:
+		return "needs a key"
 	}
-	return "needs a key"
+}
+
+// answeredHow is the phrase that finishes "verified …" on each shelf. It exists
+// so no page can end up saying "verified keyless" about a row that was measured
+// with a credential.
+func answeredHow(auth string) string {
+	if auth == AuthModeKey {
+		return "on our key"
+	}
+	return "keyless"
+}
+
+// featureQueryExample keeps the copyable curl line on each shelf pointed at
+// that shelf. Without the auth parameter the keyed page would print an example
+// that returns keyless results, which is a working command that answers the
+// wrong question.
+func featureQueryExample(auth string) string {
+	const base = "curl 'https://stillworks.supercapybara.com/api/llm/up?feature=tools,json_schema"
+	if auth == AuthModeKey {
+		return base + "&auth=key'"
+	}
+	return base + "'"
 }
 
 // reliability is shown as a plain fraction rather than a percentage: 2 of 3 is
@@ -670,7 +807,19 @@ func escapeForShellJSON(prompt string) string {
 	return replacer.Replace(prompt)
 }
 
+// snippet is the copyable call. On the keyed shelf it carries an Authorization
+// line with a placeholder the reader has to replace: a snippet that looked
+// complete would be pasted straight into a project and fail on the first call,
+// and there is no honest way to fill it in for them -- our key is ours.
 func snippet(model WorkingModel) string {
+	if model.RequiresKey() {
+		return fmt.Sprintf(`curl %s%s \
+  -H 'Authorization: Bearer YOUR_%s_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"%s","messages":[{"role":"user","content":"hello"}]}'`,
+			strings.TrimSuffix(model.BaseURL, "/"), model.ChatPath,
+			strings.ToUpper(strings.ReplaceAll(model.Slug, "-", "_")), model.ModelID)
+	}
 	return fmt.Sprintf(`curl %s%s \
   -H 'Content-Type: application/json' \
   -d '{"model":"%s","messages":[{"role":"user","content":"hello"}]}'`,

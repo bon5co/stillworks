@@ -2,12 +2,14 @@ package audit
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -21,6 +23,23 @@ import (
 
 // apiLimit caps how many verified models the runtime API returns per call.
 const apiLimit = 50
+
+// The two shelves have two addresses rather than one address with a filter.
+//
+// A filter has a default, and the default is what everybody sees and links to.
+// Making "which claim is this" a query parameter means one careless glance --
+// or one link that lost its parameters -- reads a key-required endpoint as
+// keyless, which is the exact confusion this project was built to attack. A
+// path cannot be lost: /llm/ pasted into a chat window is the keyless shelf and
+// nothing else, today and after any future default changes.
+//
+// The cost is one more page. It is small: both are the same component with the
+// auth mode threaded through, and every query underneath already takes the mode
+// as an argument.
+const (
+	keylessShelfPath = "/llm/"
+	keyedShelfPath   = "/llm/keyed/"
+)
 
 // statsDays is the window the traffic page charts; statsLimit caps the
 // referrer and path tables. Totals are always all-time -- the outcome this
@@ -92,9 +111,14 @@ func (a *App) RoutesWithServices(router chi.Router, services web.RuntimeServices
 	router.Get(socialCardPath, serveSocialCard)
 
 	router.Get("/", track(KindPage, handlers.home))
-	router.Get("/llm/", track(KindPage, handlers.shelf))
-	// Registered before the slug route so an endpoint can never be named "try".
+	router.Get(keylessShelfPath, track(KindPage, handlers.shelf))
+	// Registered before the slug route so an endpoint can never be named "try"
+	// or "keyed". Both spellings of the keyed shelf are registered because
+	// /llm/keyed with no trailing slash would otherwise be matched by the slug
+	// route and 404 as an unknown endpoint.
 	router.Get("/llm/try", track(KindPage, handlers.tryCall))
+	router.Get(keyedShelfPath, track(KindPage, handlers.keyedShelf))
+	router.Get(strings.TrimSuffix(keyedShelfPath, "/"), track(KindPage, handlers.keyedShelf))
 	router.Get("/llm/{slug}", track(KindPage, handlers.endpoint))
 	router.Get("/mcp/", track(KindPage, handlers.mcp))
 
@@ -116,26 +140,53 @@ type handlers struct {
 }
 
 func (h *handlers) home(response http.ResponseWriter, request *http.Request) {
-	working, err := WorkingModels(request.Context(), h.db, apiLimit, nil)
+	working, err := WorkingModels(request.Context(), h.db, apiLimit, nil, AuthModeNone)
 	if err != nil {
 		serverError(response, request, err)
 		return
 	}
-	var checked *time.Time
-	if len(working) > 0 {
-		checked = working[0].LastOK
+	// The keyed count is fetched separately and shown as its own line. Adding
+	// the two together would produce a single headline number that is true of
+	// nothing: no caller can use all of them under one set of conditions.
+	keyed, err := WorkingModels(request.Context(), h.db, apiLimit, nil, AuthModeKey)
+	if err != nil {
+		serverError(response, request, err)
+		return
 	}
-	render(response, request, "stillworks — directories list, we check", HomePage(working, checked))
+	// Both counts carry their own measurement time. Both lists are ordered
+	// freshest-verified first, so the head of each is the most recent thing we
+	// can point at. A number on this site without a time beside it is the thing
+	// the tagline promises never happens.
+	render(response, request, "stillworks — directories list, we check",
+		HomePage(working, keyed, lastVerified(working), lastVerified(keyed)))
+}
+
+func lastVerified(models []WorkingModel) *time.Time {
+	if len(models) == 0 {
+		return nil
+	}
+	return models[0].LastOK
 }
 
 func (h *handlers) shelf(response http.ResponseWriter, request *http.Request) {
-	query := ParseShelfQuery(request.URL.Query())
-	rows, err := ShelfMatching(request.Context(), h.db, query)
+	h.renderShelf(response, request, AuthModeNone)
+}
+
+// keyedShelf is the second shelf: providers whose free tier needs a key, probed
+// with a key of our own. Its results are a weaker claim than the first shelf's
+// and the page says so in every place a number appears.
+func (h *handlers) keyedShelf(response http.ResponseWriter, request *http.Request) {
+	h.renderShelf(response, request, AuthModeKey)
+}
+
+func (h *handlers) renderShelf(response http.ResponseWriter, request *http.Request, auth string) {
+	query := ParseShelfQuery(request.URL.Query()).On(shelfPathFor(auth))
+	rows, err := ShelfMatching(request.Context(), h.db, query, auth)
 	if err != nil {
 		serverError(response, request, err)
 		return
 	}
-	working, err := WorkingModelsMatching(request.Context(), h.db, apiLimit, query, nil)
+	working, err := WorkingModelsMatching(request.Context(), h.db, apiLimit, query, nil, auth)
 	if err != nil {
 		serverError(response, request, err)
 		return
@@ -144,20 +195,62 @@ func (h *handlers) shelf(response http.ResponseWriter, request *http.Request) {
 	// separate table because they are a separate product: an OPENAI_MODEL line
 	// naming an image model is a snippet that cannot work.
 	drawing, err := WorkingModelsMatching(
-		request.Context(), h.db, apiLimit, query, []string{CapabilityImageOut})
+		request.Context(), h.db, apiLimit, query, []string{CapabilityImageOut}, auth)
 	if err != nil {
 		serverError(response, request, err)
 		return
 	}
-	// The filter control lists every endpoint, not the filtered set: a dropdown
-	// offering only what is already selected cannot be used to change anything.
-	slugs, err := EndpointSlugs(request.Context(), h.db)
+	// The filter control lists every endpoint on this shelf, not the filtered
+	// set: a dropdown offering only what is already selected cannot be used to
+	// change anything.
+	slugs, err := EndpointSlugs(request.Context(), h.db, auth)
 	if err != nil {
 		serverError(response, request, err)
 		return
 	}
-	render(response, request, "Free keyless LLM endpoints — stillworks",
-		ShelfPage(rows, working, drawing, query, slugs))
+	// Whether this deployment can reach this shelf's providers at all. An empty
+	// keyed shelf on an instance holding no keys is a fact about the instance,
+	// and saying "nothing is verified" without that would be a claim about
+	// somebody else's service that we have no evidence for.
+	configured, err := h.shelfIsConfigured(request.Context(), auth)
+	if err != nil {
+		serverError(response, request, err)
+		return
+	}
+	render(response, request, shelfTitleFor(auth),
+		ShelfPage(rows, working, drawing, query, slugs, auth, configured))
+}
+
+// shelfIsConfigured reports whether we hold a credential for at least one
+// endpoint on this shelf. The keyless shelf needs none and is always configured.
+func (h *handlers) shelfIsConfigured(ctx context.Context, auth string) (bool, error) {
+	if auth != AuthModeKey {
+		return true, nil
+	}
+	names, err := KeyEnvsFor(ctx, h.db, auth)
+	if err != nil {
+		return false, err
+	}
+	for _, name := range names {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func shelfPathFor(auth string) string {
+	if auth == AuthModeKey {
+		return keyedShelfPath
+	}
+	return keylessShelfPath
+}
+
+func shelfTitleFor(auth string) string {
+	if auth == AuthModeKey {
+		return "Free-tier LLM endpoints that need a key — stillworks"
+	}
+	return "Free keyless LLM endpoints — stillworks"
 }
 
 // tryCall runs one call on a visitor's behalf and renders what happened. It is
@@ -228,7 +321,7 @@ func (h *handlers) endpoint(response http.ResponseWriter, request *http.Request)
 			NotFoundPage(fmt.Sprintf("No endpoint called %q is tracked here.", slug)))
 		return
 	}
-	models, err := ModelsFor(request.Context(), h.db, slug)
+	models, err := ModelsFor(request.Context(), h.db, slug, row.AuthMode)
 	if err != nil {
 		serverError(response, request, err)
 		return
@@ -247,6 +340,12 @@ func (h *handlers) mcp(response http.ResponseWriter, request *http.Request) {
 
 // apiUp is the point of the whole project: an agent asks what it can call right
 // now and gets something usable without reading a page.
+//
+// With no parameters it returns keyless models and nothing else, and it will
+// keep doing that. Callers wrote this URL into their code when keyless was the
+// only thing on the site; quietly widening it would hand somebody a base URL
+// that 401s in production, at a moment they have no reason to be looking. The
+// second shelf is reachable only by asking for it.
 func (h *handlers) apiUp(response http.ResponseWriter, request *http.Request) {
 	features, err := requestedFeatures(request.URL.Query())
 	if err != nil {
@@ -259,7 +358,15 @@ func (h *handlers) apiUp(response http.ResponseWriter, request *http.Request) {
 		})
 		return
 	}
-	working, err := WorkingModels(request.Context(), h.db, apiLimit, features)
+	auth, err := requestedAuthMode(request.URL.Query())
+	if err != nil {
+		writeJSON(response, http.StatusBadRequest, map[string]any{
+			"error":            err.Error(),
+			"valid_auth_modes": AuthModes,
+		})
+		return
+	}
+	working, err := WorkingModels(request.Context(), h.db, apiLimit, features, auth)
 	if err != nil {
 		apiError(response, err)
 		return
@@ -272,12 +379,19 @@ func (h *handlers) apiUp(response http.ResponseWriter, request *http.Request) {
 		"generated_at": time.Now().UTC(),
 		"count":        len(working),
 		// Stated in the payload so a consumer cannot mistake this for a
-		// guarantee about somebody else's free service.
-		"disclaimer": "Every entry was verified by a real call carrying no Authorization header, at the time shown, " +
-			"from this service's own IP address. Keyless quotas are commonly per-IP: an endpoint verified here can " +
-			"still answer 402 or 429 from yours. These are other people's free services and can add a key " +
-			"requirement or disappear at any moment.",
-		"models": working,
+		// guarantee about somebody else's free service. The keyless wording is
+		// left exactly as it was: it is the payload a caller predating the
+		// second shelf receives, and it is the stronger of the two claims.
+		"disclaimer": disclaimerFor(auth),
+		"models":     working,
+	}
+	if auth != AuthModeNone {
+		// Echoed back, and qualified. A caller that opted in has to be told what
+		// it opted into, on the envelope as well as on each row.
+		payload["auth"] = auth
+		payload["auth_disclaimer"] = keyNote + " Every entry carries auth_mode: \"none\" needs no key, " +
+			"\"key\" needs one of your own. Requesting auth=none, or omitting the parameter entirely, " +
+			"returns keyless entries only."
 	}
 	if len(features) > 0 {
 		// Echoed back so a caller can see its filter was understood rather than
@@ -302,7 +416,7 @@ func (h *handlers) apiEndpoint(response http.ResponseWriter, request *http.Reque
 		writeJSON(response, http.StatusNotFound, map[string]any{"error": "unknown endpoint", "slug": slug})
 		return
 	}
-	models, err := ModelsFor(request.Context(), h.db, slug)
+	models, err := ModelsFor(request.Context(), h.db, slug, row.AuthMode)
 	if err != nil {
 		apiError(response, err)
 		return
@@ -312,15 +426,22 @@ func (h *handlers) apiEndpoint(response http.ResponseWriter, request *http.Reque
 		apiError(response, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"generated_at": time.Now().UTC(),
 		"endpoint":     row,
 		// Each model carries its capability record: what the provider claims,
-		// what a real call proved, and when each was last established.
+		// what a real call proved, and when each was last established. It also
+		// carries both verdict fields: keyless is the answer to "does this
+		// answer with no key", answered_with_key to "does it answer ours". Only
+		// the one this endpoint's auth mode asks is ever filled in.
 		"models":           models,
 		"probes":           probes,
 		"capability_names": Capabilities,
-	})
+	}
+	if row.RequiresKey() {
+		payload["key_note"] = keyNote
+	}
+	writeJSON(response, http.StatusOK, payload)
 }
 
 // stats publishes this site's own traffic. A directory that tells other people
@@ -386,6 +507,45 @@ func requestedFeatures(query url.Values) ([]string, error) {
 	return features, nil
 }
 
+// requestedAuthMode reads ?auth=none|key|any. Absent means none: the parameter
+// exists so the second shelf can be asked for, never so it can arrive
+// unrequested.
+//
+// An unknown value is a 400 naming the valid ones, for the same reason an
+// unknown feature is. Silently falling back to keyless would be safe but
+// baffling -- a caller that typed auth=keyed would get a list with no
+// explanation of why its filter did nothing.
+func requestedAuthMode(query url.Values) (string, error) {
+	raw := strings.ToLower(strings.TrimSpace(query.Get("auth")))
+	if raw == "" {
+		return AuthModeNone, nil
+	}
+	if !KnownAuthMode(raw) {
+		return "", fmt.Errorf("unknown auth mode %q", raw)
+	}
+	return raw, nil
+}
+
+// disclaimerFor keeps the strongest true sentence on each answer. A caller
+// asking for keyless results gets the keyless disclaimer word for word, because
+// widening the prose to cover rows it did not ask for would weaken a claim we
+// can actually stand behind.
+func disclaimerFor(auth string) string {
+	const keyless = "Every entry was verified by a real call carrying no Authorization header, at the time shown, " +
+		"from this service's own IP address. Keyless quotas are commonly per-IP: an endpoint verified here can " +
+		"still answer 402 or 429 from yours. These are other people's free services and can add a key " +
+		"requirement or disappear at any moment."
+	const withKeys = "Every entry was verified by a real call, at the time shown, from this service's own IP " +
+		"address. Entries with auth_mode \"none\" were called with no Authorization header at all; entries " +
+		"with auth_mode \"key\" were called with stillworks' own free-tier key for that provider. Quotas are " +
+		"commonly per-IP and per-account: an endpoint verified here can still answer 402 or 429 for you. " +
+		"These are other people's free services and can change or disappear at any moment."
+	if auth == AuthModeNone {
+		return keyless
+	}
+	return withKeys
+}
+
 func writeEnv(response http.ResponseWriter, working []WorkingModel) {
 	response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	response.Header().Set("Cache-Control", "no-store")
@@ -394,7 +554,19 @@ func writeEnv(response http.ResponseWriter, working []WorkingModel) {
 		// Saying nothing is correct here. An Ollama-shaped endpoint cannot be
 		// described with OPENAI_ variables, and emitting them anyway would hand
 		// out a snippet that fails on first use.
-		fmt.Fprintln(response, "# stillworks: no OpenAI-compatible keyless endpoint is currently verified")
+		fmt.Fprintln(response, "# stillworks: no OpenAI-compatible endpoint is currently verified for that request")
+		return
+	}
+	if first.RequiresKey() {
+		// The placeholder is deliberately not a value. Our own key is never
+		// rendered anywhere, and a file that looked complete would be pasted
+		// into a project and fail at the first call with nothing to explain it.
+		fmt.Fprintf(response, "# stillworks: %s requires an API key. Verified with our own free-tier key %s;\n",
+			first.Slug, humanWhenPtr(first.LastOK))
+		fmt.Fprintln(response, "# that is not a statement about what your signup's free tier includes.")
+		fmt.Fprintf(response, "OPENAI_BASE_URL=%s\n", first.OpenAIBaseURL())
+		fmt.Fprintf(response, "OPENAI_API_KEY=your-%s-api-key\n", first.Slug)
+		fmt.Fprintf(response, "OPENAI_MODEL=%s\n", first.ModelID)
 		return
 	}
 	fmt.Fprintf(response, "# stillworks: verified keyless %s\n", humanWhenPtr(first.LastOK))

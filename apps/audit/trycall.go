@@ -81,13 +81,19 @@ const (
 	RefusedUnknownPair = "unknown_pair"
 	RefusedCrawler     = "crawler"
 	RefusedRateLimit   = "rate_limited"
+	// RefusedNeedsKey covers the second shelf. A test call against a keyed
+	// endpoint could only be made on our credential, which would be free
+	// inference on our quota handed to whoever asked -- and would answer a
+	// question nobody has: that our key works is exactly what the shelf already
+	// says. It will never work, so it is a 400 rather than a 429.
+	RefusedNeedsKey = "needs_key"
 )
 
 // RefusalStatus is the status code for this result, or 200 when a call was
 // actually made -- whatever the provider then answered.
 func (result TryResult) RefusalStatus() int {
 	switch result.RefusedBecause {
-	case RefusedUnknownPair:
+	case RefusedUnknownPair, RefusedNeedsKey:
 		return http.StatusBadRequest
 	case RefusedCrawler:
 		return http.StatusForbidden
@@ -101,6 +107,20 @@ func (result TryResult) RefusalStatus() int {
 // FromServer is the label on every result this file produces. The browser path
 // writes its own, and the two must never be confused for each other.
 const FromServer = "stillworks' own server address"
+
+// keyedCallRefusal is the guard that keeps the test-call route off the second
+// shelf. It is a free function so it can be tested without a database: Run
+// needs one to look the pair up first, and a guard that only the live route
+// exercises is a guard that can be deleted in a refactor with every test still
+// green.
+func keyedCallRefusal(endpoint Endpoint) (string, bool) {
+	if !endpoint.RequiresKey() {
+		return "", false
+	}
+	return "That endpoint only answers a request carrying a key. This site holds its own free-tier key " +
+		"and probes with it, but it will not spend that key on a call for somebody else — and it would prove " +
+		"nothing you cannot read off the shelf. Get your own free key from the provider and run the snippet.", true
+}
 
 // Made reports whether a call actually happened, so the view can show a refusal
 // as a refusal instead of dressing it as a probe result.
@@ -164,6 +184,11 @@ func (runner *TryRunner) Run(
 		result.RefusedBecause = RefusedUnknownPair
 		return result, nil
 	}
+	if reason, refused := keyedCallRefusal(endpoint); refused {
+		result.Refused = reason
+		result.RefusedBecause = RefusedNeedsKey
+		return result, nil
+	}
 	if isCrawler(clip(request.UserAgent(), userAgentLimit)) {
 		// A crawler following this from a link would spend somebody else's free
 		// quota on nobody's behalf.
@@ -189,7 +214,7 @@ func (runner *TryRunner) Run(
 		return result, err
 	}
 	result.URL = joinURL(endpoint.BaseURL, endpoint.ChatPath)
-	status, payload, callErr := runner.prober.do(ctx, http.MethodPost, result.URL, body)
+	status, payload, callErr := runner.prober.doUnauthenticated(ctx, http.MethodPost, result.URL, body)
 	result.CalledAt = started.UTC()
 	result.LatencyMS = int(time.Since(started).Milliseconds())
 	result.HTTPStatus = status

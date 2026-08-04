@@ -13,7 +13,8 @@ import (
 // DefaultProbeInterval is how often a deployed instance re-probes. Hourly is
 // frequent enough that a provider quietly adding a key requirement is caught the
 // same day, and infrequent enough to stay a guest rather than a nuisance: one
-// models call plus at most three chat calls per endpoint per cycle.
+// models call plus that endpoint's own small budget of chat calls per cycle,
+// which is one for the providers whose published limits are tightest.
 const DefaultProbeInterval = time.Hour
 
 // SeedIfEmpty inserts the seeded claims when the table is empty. A fresh
