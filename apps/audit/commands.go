@@ -34,6 +34,9 @@ func Commands(services management.ProjectServices) []management.Command {
 							Set("docs_url = EXCLUDED.docs_url").
 							Set("notes = EXCLUDED.notes").
 							Set("openai_compatible = EXCLUDED.openai_compatible").
+							Set("image_path = EXCLUDED.image_path").
+							Set("image_mode = EXCLUDED.image_mode").
+							Set("image_models_path = EXCLUDED.image_models_path").
 							Set("updated_at = now()").
 							Exec(ctx)
 						if err != nil {
@@ -51,6 +54,15 @@ func Commands(services management.ProjectServices) []management.Command {
 			Run: func(ctx context.Context, _ []string, streams management.Streams) error {
 				return withDatabase(ctx, services, func(db *database.DB) error {
 					return runCycle(ctx, db, streams.Out)
+				})
+			},
+		},
+		{
+			Name:    "probecaps",
+			Summary: "Run one capability cycle: tools, structured output, vision, image generation",
+			Run: func(ctx context.Context, _ []string, streams management.Streams) error {
+				return withDatabase(ctx, services, func(db *database.DB) error {
+					return runCapabilityCycle(ctx, db, streams.Out, capabilityPause)
 				})
 			},
 		},
@@ -152,9 +164,13 @@ func recordModels(
 			Set("chat_capable = EXCLUDED.chat_capable").
 			Set("input_modalities = EXCLUDED.input_modalities").
 			Set("output_modalities = EXCLUDED.output_modalities").
+			Returning("id").
 			Exec(ctx)
 		if err != nil {
 			return fmt.Errorf("record model %s: %w", item.ID, err)
+		}
+		if err := recordClaims(ctx, db, model.ID, item.Claims); err != nil {
+			return err
 		}
 	}
 	return nil

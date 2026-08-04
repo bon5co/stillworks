@@ -21,6 +21,12 @@ const UserAgent = "stillworks/0.1 (+https://stillworks.supercapybara.com; probes
 // Budget per single HTTP call. Liveness, not benchmarking.
 const requestTimeout = 25 * time.Second
 
+// imageRequestTimeout is the budget for an image generation probe. Drawing a
+// picture is not answering a question: OVH's only supported size is 1024x1024
+// and the reply is megabytes of base64, so the liveness budget would time out on
+// a working endpoint and leave the verdict permanently unverified.
+const imageRequestTimeout = 3 * time.Minute
+
 // maxCompletionTokens keeps the chat probe as small as is honest. It is not 8:
 // reasoning models spend the whole budget on a hidden reasoning field and return
 // content:"" with finish_reason:"length", which reads as a broken endpoint when
@@ -32,16 +38,20 @@ const maxCompletionTokens = 32
 // there is no retry path in this type, and each method issues exactly one
 // request, so "probe an endpoint twice in a cycle" is not expressible.
 type Prober struct {
-	Client    *http.Client
-	UserAgent string
-	Now       func() time.Time
+	Client *http.Client
+	// ImageClient is the same thing with a longer patience, used only by the
+	// image generation probe.
+	ImageClient *http.Client
+	UserAgent   string
+	Now         func() time.Time
 }
 
 func NewProber() *Prober {
 	return &Prober{
-		Client:    &http.Client{Timeout: requestTimeout},
-		UserAgent: UserAgent,
-		Now:       time.Now,
+		Client:      &http.Client{Timeout: requestTimeout},
+		ImageClient: &http.Client{Timeout: imageRequestTimeout},
+		UserAgent:   UserAgent,
+		Now:         time.Now,
 	}
 }
 
@@ -52,6 +62,12 @@ type DiscoveredModel struct {
 	ChatCapable bool
 	InputModes  string
 	OutputModes string
+	// Claims is what the provider's own listing says about each capability,
+	// keyed by capability name and absent where it says nothing. It is recorded
+	// beside the measurement, never instead of it: llm7 published tools:true
+	// for every turbo model and vision:false for all of them on 2026-08-04, and
+	// both statements needed a real call before either could be repeated.
+	Claims map[string]bool
 }
 
 func (p *Prober) now() time.Time {
@@ -61,14 +77,33 @@ func (p *Prober) now() time.Time {
 	return time.Now()
 }
 
+// responseLimit is how much of a JSON reply is worth reading. An endpoint that
+// wants to send more than a megabyte in answer to "ping" is not answering.
+const responseLimit = 1 << 20
+
 func (p *Prober) do(ctx context.Context, method, endpoint string, body []byte) (int, []byte, error) {
+	status, _, payload, _, err := p.doRaw(ctx, p.Client, method, endpoint, body, responseLimit)
+	return status, payload, err
+}
+
+// doRaw is the single request every probe goes through. It reports the response
+// headers, because an image probe cannot judge its answer without the content
+// type, and reports truncation separately from failure: a reply cut off at the
+// read limit proves nothing and must not be scored as a bad body.
+func (p *Prober) doRaw(
+	ctx context.Context,
+	client *http.Client,
+	method, endpoint string,
+	body []byte,
+	limit int64,
+) (status int, header http.Header, payload []byte, truncated bool, err error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, false, err
 	}
 	request.Header.Set("User-Agent", p.UserAgent)
 	request.Header.Set("Accept", "application/json")
@@ -77,16 +112,20 @@ func (p *Prober) do(ctx context.Context, method, endpoint string, body []byte) (
 	}
 	// Deliberately no Authorization header, ever. The entire claim under test is
 	// that this works without one.
-	response, err := p.Client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, false, err
 	}
 	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	// One byte past the limit, so overflow is visible rather than silent.
+	payload, err = io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
-		return response.StatusCode, nil, err
+		return response.StatusCode, response.Header, nil, false, err
 	}
-	return response.StatusCode, payload, nil
+	if int64(len(payload)) > limit {
+		return response.StatusCode, response.Header, payload[:limit], true, nil
+	}
+	return response.StatusCode, response.Header, payload, false, nil
 }
 
 // classify turns a transport error or status code into an outcome. The split
@@ -194,12 +233,39 @@ func joinURL(base, path string) string {
 
 // ProbeModels asks an endpoint what it offers. One request, no retry.
 func (p *Prober) ProbeModels(ctx context.Context, endpoint Endpoint) (Probe, []DiscoveredModel) {
+	return p.probeListing(ctx, endpoint, endpoint.ModelsPath, KindModels)
+}
+
+// ProbeImageModels reads a separate image model listing where the provider
+// keeps one. Pollinations does: its text listing carries one text model and no
+// image model at all, so without this call the image endpoint could only ever
+// be claimed, never attributed to a model and verified.
+func (p *Prober) ProbeImageModels(ctx context.Context, endpoint Endpoint) (Probe, []DiscoveredModel) {
+	probe, discovered := p.probeListing(ctx, endpoint, endpoint.ImageModelsPath, KindImageModels)
+	for index := range discovered {
+		// These come from an image-only listing, so the modality is a fact
+		// about where we read them rather than a guess about their names.
+		discovered[index].ChatCapable = false
+		discovered[index].OutputModes = "image"
+		if discovered[index].Claims == nil {
+			discovered[index].Claims = map[string]bool{}
+		}
+		discovered[index].Claims[CapabilityImageOut] = true
+	}
+	return probe, discovered
+}
+
+func (p *Prober) probeListing(
+	ctx context.Context,
+	endpoint Endpoint,
+	path, kind string,
+) (Probe, []DiscoveredModel) {
 	started := p.now()
-	status, payload, err := p.do(ctx, http.MethodGet, joinURL(endpoint.BaseURL, endpoint.ModelsPath), nil)
+	status, payload, err := p.do(ctx, http.MethodGet, joinURL(endpoint.BaseURL, path), nil)
 	probe := Probe{
 		EndpointID: endpoint.ID,
 		StartedAt:  started,
-		Kind:       KindModels,
+		Kind:       kind,
 		HTTPStatus: status,
 		LatencyMS:  int(p.now().Sub(started).Milliseconds()),
 		Outcome:    classify(status, payload, err),
@@ -222,9 +288,10 @@ func (p *Prober) ProbeModels(ctx context.Context, endpoint Endpoint) (Probe, []D
 	return probe, models
 }
 
-// parseModels tolerates the three shapes actually served in the wild: the
-// OpenAI {"data":[{"id":...}]} envelope, a bare array, and Ollama's
-// {"models":[{"name":...}]}.
+// parseModels tolerates the four shapes actually served in the wild: the OpenAI
+// {"data":[{"id":...}]} envelope, a bare array of objects, Ollama's
+// {"models":[{"name":...}]}, and a bare array of plain strings --
+// image.pollinations.ai/models answers ["sana"] and nothing else.
 func parseModels(payload []byte) ([]DiscoveredModel, error) {
 	var envelope struct {
 		Data   []modelEntry `json:"data"`
@@ -244,19 +311,92 @@ func parseModels(payload []byte) ([]DiscoveredModel, error) {
 			return found, nil
 		}
 	}
+	var names []string
+	if err := json.Unmarshal(payload, &names); err == nil {
+		var out []DiscoveredModel
+		for _, name := range names {
+			if strings.TrimSpace(name) == "" {
+				continue
+			}
+			out = append(out, DiscoveredModel{ID: name, ChatCapable: chatCapable(name, nil, nil)})
+		}
+		if len(out) > 0 {
+			return out, nil
+		}
+	}
 	return nil, errors.New("no model ids found in response")
 }
 
 // modelEntry covers the id field names actually served in the wild: OpenAI uses
 // "id", Ollama uses "name"/"model". Pollinations additionally publishes
-// modalities, which is the only non-guessing way to know a model can chat.
+// modalities, which is the only non-guessing way to know a model can chat, and
+// llm7 publishes a whole capabilities block. Every capability field is a
+// pointer so "the provider said false" stays distinguishable from "the provider
+// said nothing", which is the same tri-state discipline the verdicts use.
 type modelEntry struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Model       string   `json:"model"`
 	Tier        string   `json:"tier"`
+	ModelType   string   `json:"model_type"`
 	InputModes  []string `json:"input_modalities"`
 	OutputModes []string `json:"output_modalities"`
+	// llm7 nests the same information one level down.
+	Modalities struct {
+		Input  []string `json:"input"`
+		Output []string `json:"output"`
+	} `json:"modalities"`
+	Tools        *bool `json:"tools"`
+	Vision       *bool `json:"vision"`
+	JSONMode     *bool `json:"json_mode"`
+	Capabilities *struct {
+		Tools    *bool `json:"tools"`
+		Vision   *bool `json:"vision"`
+		JSONMode *bool `json:"json_mode"`
+	} `json:"capabilities"`
+}
+
+func (entry modelEntry) inputModes() []string {
+	if len(entry.InputModes) > 0 {
+		return entry.InputModes
+	}
+	return entry.Modalities.Input
+}
+
+func (entry modelEntry) outputModes() []string {
+	if len(entry.OutputModes) > 0 {
+		return entry.OutputModes
+	}
+	return entry.Modalities.Output
+}
+
+// claims reads the provider's own capability statements. json_mode is recorded
+// against json_object rather than json_schema because that is what the name
+// means: llm7 publishes json_mode:true for a model whose json_schema request
+// comes back 405, so treating the two as one claim would make our own record
+// wrong before a single call was made.
+func (entry modelEntry) claims() map[string]bool {
+	claimed := map[string]bool{}
+	record := func(capability string, value *bool) {
+		if value != nil {
+			claimed[capability] = *value
+		}
+	}
+	record(CapabilityTools, entry.Tools)
+	record(CapabilityVision, entry.Vision)
+	record(CapabilityJSONObject, entry.JSONMode)
+	if entry.Capabilities != nil {
+		record(CapabilityTools, entry.Capabilities.Tools)
+		record(CapabilityVision, entry.Capabilities.Vision)
+		record(CapabilityJSONObject, entry.Capabilities.JSONMode)
+	}
+	if entry.ModelType == "image" || containsMode(entry.outputModes(), "image") {
+		claimed[CapabilityImageOut] = true
+	}
+	if len(claimed) == 0 {
+		return nil
+	}
+	return claimed
 }
 
 func collect(entries []modelEntry) []DiscoveredModel {
@@ -272,15 +412,27 @@ func collect(entries []modelEntry) []DiscoveredModel {
 		if id == "" {
 			continue
 		}
+		input, output := item.inputModes(), item.outputModes()
 		out = append(out, DiscoveredModel{
 			ID:          id,
 			Tier:        item.Tier,
-			ChatCapable: chatCapable(id, item.InputModes, item.OutputModes),
-			InputModes:  strings.Join(item.InputModes, ","),
-			OutputModes: strings.Join(item.OutputModes, ","),
+			ChatCapable: entryChatCapable(item, id, input, output),
+			InputModes:  strings.Join(input, ","),
+			OutputModes: strings.Join(output, ","),
+			Claims:      item.claims(),
 		})
 	}
 	return out
+}
+
+// entryChatCapable prefers the provider's own type label over anything we can
+// infer. llm7 labels each model chat, image or video, which settles the
+// question that the name heuristic only guesses at.
+func entryChatCapable(entry modelEntry, id string, input, output []string) bool {
+	if entry.ModelType != "" {
+		return entry.ModelType == "chat"
+	}
+	return chatCapable(id, input, output)
 }
 
 // nonChatMarkers are substrings that identify a model which cannot answer a
@@ -311,9 +463,11 @@ func chatCapable(id string, input, output []string) bool {
 	return true
 }
 
-func containsText(modes []string) bool {
+func containsText(modes []string) bool { return containsMode(modes, "text") }
+
+func containsMode(modes []string, want string) bool {
 	for _, mode := range modes {
-		if strings.EqualFold(mode, "text") {
+		if strings.EqualFold(mode, want) {
 			return true
 		}
 	}

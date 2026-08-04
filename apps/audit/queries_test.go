@@ -90,10 +90,40 @@ func TestJSONCarriesOpenAIBaseForCompatibleEndpoints(t *testing.T) {
 	}
 }
 
+// The disagreement between a claim and a measurement is the product, so it has
+// a name and the name has to mean only that.
+func TestCapabilityRecordSeparatesClaimFromMeasurement(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name             string
+		record           CapabilityRecord
+		wantVerified     bool
+		wantContradicted bool
+	}{
+		{"claimed and proven", CapabilityRecord{Claimed: &yes, Supported: &yes}, true, false},
+		{"claimed and disproven", CapabilityRecord{Claimed: &yes, Supported: &no}, false, true},
+		{"never claimed, proven anyway", CapabilityRecord{Supported: &yes}, true, false},
+		{"claimed absent and measured absent", CapabilityRecord{Claimed: &no, Supported: &no}, false, false},
+		// The state the whole tri-state exists for: nobody has looked.
+		{"claimed but never measured", CapabilityRecord{Claimed: &yes}, false, false},
+		{"nothing known at all", CapabilityRecord{}, false, false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.record.Verified(); got != testCase.wantVerified {
+				t.Fatalf("Verified() = %v, want %v", got, testCase.wantVerified)
+			}
+			if got := testCase.record.ClaimContradicted(); got != testCase.wantContradicted {
+				t.Fatalf("ClaimContradicted() = %v, want %v", got, testCase.wantContradicted)
+			}
+		})
+	}
+}
+
 func TestFirstOpenAICompatibleSkipsIncompatibleEntries(t *testing.T) {
 	working := []WorkingModel{
-		{Slug: "mlvoca", OpenAICompatible: false},
-		{Slug: "pollinations", OpenAICompatible: true},
+		{Slug: "mlvoca", OpenAICompatible: false, ChatCapable: true},
+		{Slug: "pollinations", OpenAICompatible: true, ChatCapable: true},
 	}
 	first, ok := firstOpenAICompatible(working)
 	if !ok || first.Slug != "pollinations" {
@@ -101,5 +131,11 @@ func TestFirstOpenAICompatibleSkipsIncompatibleEntries(t *testing.T) {
 	}
 	if _, ok := firstOpenAICompatible(working[:1]); ok {
 		t.Fatal("must report none when no entry is OpenAI compatible")
+	}
+	// ?feature=image_out returns models that draw. OPENAI_MODEL=sana in a .env
+	// is a snippet that cannot work.
+	drawing := []WorkingModel{{Slug: "pollinations", ModelID: "sana", OpenAICompatible: true}}
+	if _, ok := firstOpenAICompatible(drawing); ok {
+		t.Fatal("an image model must never be offered as OPENAI_MODEL")
 	}
 }

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"time"
@@ -72,6 +73,54 @@ func StartProber(ctx context.Context, db *database.DB, interval time.Duration, l
 	}()
 }
 
+// StartCapabilityProber runs the feature cycle on its own, much slower clock.
+//
+// It is a separate ticker rather than "every twenty-fourth liveness cycle" so
+// that slowing the liveness probe down with PROBE_INTERVAL cannot silently
+// speed the expensive one up, and so a capability cycle that takes ten minutes
+// of deliberate pauses never delays a liveness cycle.
+//
+// The first run is delayed rather than immediate: a fresh deployment has no
+// keyless verdicts yet, so a capability cycle at startup would find nothing to
+// ask about and would have to wait a day to try again.
+func StartCapabilityProber(
+	ctx context.Context,
+	db *database.DB,
+	interval time.Duration,
+	logger *slog.Logger,
+) {
+	if interval <= 0 {
+		interval = DefaultCapabilityInterval
+	}
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	}
+
+	go func() {
+		// Long enough for the first liveness cycle to have proven which models
+		// answer without a key, which is what decides who gets asked.
+		if err := sleepOrStop(ctx, capabilityWarmup); err != nil {
+			return
+		}
+		runCapabilitiesOnce(ctx, db, logger)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				runCapabilitiesOnce(ctx, db, logger)
+			}
+		}
+	}()
+}
+
+// capabilityWarmup is how long the capability cycle waits after boot for the
+// liveness cycle to establish who is keyless.
+const capabilityWarmup = 5 * time.Minute
+
 func runOnce(ctx context.Context, db *database.DB, logger *slog.Logger) {
 	// A cycle is bounded well under the interval so a hung provider cannot
 	// stall the schedule indefinitely.
@@ -88,6 +137,27 @@ func runOnce(ctx context.Context, db *database.DB, logger *slog.Logger) {
 		return
 	}
 	logger.Info("stillworks probe cycle complete", "duration", time.Since(started).Round(time.Second))
+}
+
+func runCapabilitiesOnce(ctx context.Context, db *database.DB, logger *slog.Logger) {
+	// Generous next to the liveness cycle's twenty minutes: this one pauses
+	// fifteen seconds between requests on purpose, and an image generation call
+	// can take a provider a minute on its own.
+	cycleCtx, cancel := context.WithTimeout(ctx, 45*time.Minute)
+	defer cancel()
+
+	started := time.Now()
+	if err := runCapabilityCycle(cycleCtx, db, probeLog{logger}, capabilityPause); err != nil {
+		// A cycle spends most of its time deliberately waiting between
+		// requests, so shutting the process down mid-pause is the normal way
+		// for it to end. Logging that as a failure would cry wolf on every
+		// deploy.
+		if !errors.Is(err, context.Canceled) {
+			logger.Error("stillworks capability cycle failed", "error", err)
+		}
+		return
+	}
+	logger.Info("stillworks capability cycle complete", "duration", time.Since(started).Round(time.Second))
 }
 
 // probeLog adapts the cycle's human-readable output onto the structured logger,

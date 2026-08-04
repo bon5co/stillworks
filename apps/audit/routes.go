@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,7 +68,7 @@ type handlers struct {
 }
 
 func (h *handlers) home(response http.ResponseWriter, request *http.Request) {
-	working, err := WorkingModels(request.Context(), h.db, apiLimit)
+	working, err := WorkingModels(request.Context(), h.db, apiLimit, nil)
 	if err != nil {
 		serverError(response, request, err)
 		return
@@ -84,12 +86,17 @@ func (h *handlers) shelf(response http.ResponseWriter, request *http.Request) {
 		serverError(response, request, err)
 		return
 	}
-	working, err := WorkingModels(request.Context(), h.db, apiLimit)
+	working, err := WorkingModels(request.Context(), h.db, apiLimit, nil)
 	if err != nil {
 		serverError(response, request, err)
 		return
 	}
-	render(response, request, "Free keyless LLM endpoints — stillworks", ShelfPage(rows, working))
+	drawing, err := WorkingModels(request.Context(), h.db, apiLimit, []string{CapabilityImageOut})
+	if err != nil {
+		serverError(response, request, err)
+		return
+	}
+	render(response, request, "Free keyless LLM endpoints — stillworks", ShelfPage(rows, working, drawing))
 }
 
 func (h *handlers) endpoint(response http.ResponseWriter, request *http.Request) {
@@ -125,7 +132,18 @@ func (h *handlers) mcp(response http.ResponseWriter, request *http.Request) {
 // apiUp is the point of the whole project: an agent asks what it can call right
 // now and gets something usable without reading a page.
 func (h *handlers) apiUp(response http.ResponseWriter, request *http.Request) {
-	working, err := WorkingModels(request.Context(), h.db, apiLimit)
+	features, err := requestedFeatures(request.URL.Query())
+	if err != nil {
+		// The caller asked for something by name. Answering 200 with a shorter
+		// list would look like "nothing supports that", which is a different
+		// and much more expensive thing to be told.
+		writeJSON(response, http.StatusBadRequest, map[string]any{
+			"error":          err.Error(),
+			"valid_features": Capabilities,
+		})
+		return
+	}
+	working, err := WorkingModels(request.Context(), h.db, apiLimit, features)
 	if err != nil {
 		apiError(response, err)
 		return
@@ -134,7 +152,7 @@ func (h *handlers) apiUp(response http.ResponseWriter, request *http.Request) {
 		writeEnv(response, working)
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"generated_at": time.Now().UTC(),
 		"count":        len(working),
 		// Stated in the payload so a consumer cannot mistake this for a
@@ -144,7 +162,17 @@ func (h *handlers) apiUp(response http.ResponseWriter, request *http.Request) {
 			"still answer 402 or 429 from yours. These are other people's free services and can add a key " +
 			"requirement or disappear at any moment.",
 		"models": working,
-	})
+	}
+	if len(features) > 0 {
+		// Echoed back so a caller can see its filter was understood rather than
+		// silently dropped. The key is absent when nothing was asked for, so
+		// the payload a caller predating the filter receives is unchanged.
+		payload["features"] = features
+		payload["feature_disclaimer"] = "A feature is listed only where a real call proved it: a tool call the " +
+			"caller could dispatch, a reply that parsed and matched the schema, an answer about an image we sent. " +
+			"Models whose features have never been probed are not returned by a filtered request."
+	}
+	writeJSON(response, http.StatusOK, payload)
 }
 
 func (h *handlers) apiEndpoint(response http.ResponseWriter, request *http.Request) {
@@ -171,8 +199,11 @@ func (h *handlers) apiEndpoint(response http.ResponseWriter, request *http.Reque
 	writeJSON(response, http.StatusOK, map[string]any{
 		"generated_at": time.Now().UTC(),
 		"endpoint":     row,
-		"models":       models,
-		"probes":       probes,
+		// Each model carries its capability record: what the provider claims,
+		// what a real call proved, and when each was last established.
+		"models":           models,
+		"probes":           probes,
+		"capability_names": Capabilities,
 	})
 }
 
@@ -205,6 +236,40 @@ func (h *handlers) apiStats(response http.ResponseWriter, request *http.Request)
 	})
 }
 
+// requestedFeatures reads ?feature=tools,json_schema -- repeatable and
+// comma-separated, both, because an agent writing the query string by hand will
+// try whichever it thought of first. Multiple features are ANDed: an agent that
+// needs tools and a schema needs one model that does both, not two models.
+//
+// An unknown name is a 400 rather than a filter that quietly matches nothing.
+// "No models support tols" is a true sentence that would send somebody looking
+// for a provider outage.
+func requestedFeatures(query url.Values) ([]string, error) {
+	var features []string
+	for _, value := range query["feature"] {
+		for _, name := range strings.Split(value, ",") {
+			name = strings.ToLower(strings.TrimSpace(name))
+			if name == "" {
+				continue
+			}
+			if !KnownCapability(name) {
+				return nil, fmt.Errorf("unknown feature %q", name)
+			}
+			if !slices.Contains(features, name) {
+				features = append(features, name)
+			}
+		}
+	}
+	// image_out belongs to models that draw and the others to models that talk,
+	// so a request for both can never match anything. Saying so beats an empty
+	// list that looks like everybody's endpoint went down.
+	if slices.Contains(features, CapabilityImageOut) && len(features) > 1 {
+		return nil, fmt.Errorf("%q cannot be combined with a chat feature: no model both draws and chats",
+			CapabilityImageOut)
+	}
+	return features, nil
+}
+
 func writeEnv(response http.ResponseWriter, working []WorkingModel) {
 	response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	response.Header().Set("Cache-Control", "no-store")
@@ -222,9 +287,13 @@ func writeEnv(response http.ResponseWriter, working []WorkingModel) {
 	fmt.Fprintf(response, "OPENAI_MODEL=%s\n", first.ModelID)
 }
 
+// firstOpenAICompatible skips models that cannot answer a chat call at all.
+// OPENAI_MODEL only means something to a chat client, so handing back an image
+// model -- which ?feature=image_out returns -- would produce a .env that fails
+// on first use.
 func firstOpenAICompatible(working []WorkingModel) (WorkingModel, bool) {
 	for _, model := range working {
-		if model.OpenAICompatible {
+		if model.OpenAICompatible && model.ChatCapable {
 			return model, true
 		}
 	}

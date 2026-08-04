@@ -127,6 +127,7 @@ func main() {
 	// The prober runs inside this process rather than as a host cron entry, so
 	// the deployment stays one self-contained thing.
 	audit.StartProber(backgroundCtx, db, probeInterval(), slog.Default())
+	audit.StartCapabilityProber(backgroundCtx, db, capabilityInterval(), slog.Default())
 	fmt.Fprintf(os.Stdout, "Starting development server at http://%s/\n", address)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -164,14 +165,24 @@ func exit(err error) {
 // silently, because an instance that has quietly stopped checking is the exact
 // failure this project exists to expose.
 func probeInterval() time.Duration {
-	raw := os.Getenv("PROBE_INTERVAL")
+	return intervalFromEnv("PROBE_INTERVAL", audit.DefaultProbeInterval)
+}
+
+// capabilityInterval is separate from PROBE_INTERVAL so that slowing the
+// liveness probe down cannot speed the expensive feature probe up.
+func capabilityInterval() time.Duration {
+	return intervalFromEnv("CAPABILITY_INTERVAL", audit.DefaultCapabilityInterval)
+}
+
+func intervalFromEnv(name string, fallback time.Duration) time.Duration {
+	raw := os.Getenv(name)
 	if raw == "" {
-		return audit.DefaultProbeInterval
+		return fallback
 	}
 	parsed, err := time.ParseDuration(raw)
 	if err != nil || parsed <= 0 {
-		fmt.Fprintf(os.Stderr, "stillworks: ignoring PROBE_INTERVAL=%q: %v\n", raw, err)
-		return audit.DefaultProbeInterval
+		fmt.Fprintf(os.Stderr, "stillworks: ignoring %s=%q: %v\n", name, raw, err)
+		return fallback
 	}
 	return parsed
 }

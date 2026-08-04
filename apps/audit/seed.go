@@ -38,7 +38,13 @@ var SeedEndpoints = []Endpoint{
 		DocsURL:          "https://github.com/pollinations/pollinations",
 		OpenAICompatible: true,
 		Active:           true,
-		Notes:            "Claimed keyless, OpenAI-compatible surface at /openai. Serves GPT-OSS class models with no account.",
+		// The image surface is a different host with a different shape: a GET
+		// on a prompt URL that answers with the picture itself, and its own
+		// model listing that the text listing knows nothing about.
+		ImagePath:       "https://image.pollinations.ai/prompt/",
+		ImageMode:       ImageModePromptURL,
+		ImageModelsPath: "https://image.pollinations.ai/models",
+		Notes:           "Claimed keyless, OpenAI-compatible surface at /openai. Serves GPT-OSS class models with no account.",
 	},
 	{
 		Slug:             "ovh-anonymous",
@@ -51,7 +57,13 @@ var SeedEndpoints = []Endpoint{
 		DocsURL:          "https://endpoints.ai.cloud.ovh.net/",
 		OpenAICompatible: true,
 		Active:           true,
-		Notes:            "Claimed permanent free anonymous tier, roughly 2 requests per minute per IP per model, no signup. Rate limit is low enough that a single probe per cycle is the ceiling of what is polite.",
+		// Verified 2026-08-04: POST /v1/images/generations answers a keyless
+		// request with a 3.3 MB OpenAI images envelope carrying a real PNG. The
+		// image models are already in the same /v1/models listing as the chat
+		// ones, so no second listing call is needed here.
+		ImagePath: "/v1/images/generations",
+		ImageMode: ImageModeOpenAI,
+		Notes: "Claimed permanent free anonymous tier, roughly 2 requests per minute per IP per model, no signup. Rate limit is low enough that a single probe per cycle is the ceiling of what is polite.",
 	},
 	{
 		Slug:             "mlvoca",
