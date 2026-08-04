@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -147,6 +148,79 @@ func (row ShelfRow) CallURL() string { return joinURL(row.BaseURL, row.ChatPath)
 // RequiresKey reports whether calling this model means bringing a key.
 func (m WorkingModel) RequiresKey() bool { return m.AuthMode == AuthModeKey }
 
+// Auth is the wire spelling of the same question, in the words an HTTP client
+// uses rather than the words this database uses: "none" means send no
+// Authorization header at all, "bearer" means send one of your own. It is a
+// separate field from auth_mode rather than a rename, because auth_mode is a
+// published field that callers already read.
+func (m WorkingModel) Auth() string {
+	if m.RequiresKey() {
+		return "bearer"
+	}
+	return "none"
+}
+
+// Answered is the track record as one readable value, "8/10". It is published
+// alongside recent_successes and recent_attempts rather than instead of them:
+// the numbers are for arithmetic and this is for printing, and a consumer that
+// prints the pair itself has to know which order they go in.
+func (m WorkingModel) Answered() string {
+	return fmt.Sprintf("%d/%d", m.Successes, m.Attempts)
+}
+
+// SuccessRate is the fraction of recent checks that answered. Zero attempts is
+// zero rather than an error: the ordering treats "never asked" as the bottom of
+// the list, which is where an endpoint nobody has managed to check belongs.
+func (m WorkingModel) SuccessRate() float64 {
+	if m.Attempts == 0 {
+		return 0
+	}
+	return float64(m.Successes) / float64(m.Attempts)
+}
+
+// Proved, ClaimedUnproved and Failed are the capability map flattened into the
+// three answers a caller can act on, in the order the shelf lists features.
+//
+// A feature missing from all three was never probed. That is the fourth state,
+// and it is deliberately not a list: an "unprobed" array would be read as a
+// verdict about the model, when it is a fact about us. The tri-state in
+// capabilities[] still carries the whole record for anybody who wants it, which
+// is why that object stays.
+func (m WorkingModel) Proved() []string {
+	return m.capabilitiesWhere(func(record CapabilityRecord) bool {
+		return record.Supported != nil && *record.Supported
+	})
+}
+
+func (m WorkingModel) ClaimedUnproved() []string {
+	return m.capabilitiesWhere(func(record CapabilityRecord) bool {
+		return record.Supported == nil && record.Claimed != nil && *record.Claimed
+	})
+}
+
+func (m WorkingModel) Failed() []string {
+	return m.capabilitiesWhere(func(record CapabilityRecord) bool {
+		return record.Supported != nil && !*record.Supported
+	})
+}
+
+// capabilitiesWhere walks the published capability order rather than the map, so
+// the arrays come out in the same order on every row and every request. A map
+// iteration here would reorder the payload between two identical calls and make
+// a diff of two responses unreadable.
+func (m WorkingModel) capabilitiesWhere(matches func(CapabilityRecord) bool) []string {
+	// Non-nil, always: the field strip on the home page promises every model
+	// carries these three arrays, and JSON null is not an empty array.
+	names := []string{}
+	for _, capability := range Capabilities {
+		record, held := m.Capabilities[capability]
+		if held && matches(record) {
+			names = append(names, capability)
+		}
+	}
+	return names
+}
+
 // MarshalJSON adds the derived base URL so a consumer never has to work it out,
 // and -- for a keyed row only -- the sentence that stops the row being read as
 // the other kind. It rides on the row rather than only on the envelope because
@@ -157,11 +231,25 @@ func (m WorkingModel) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		payload
 		OpenAIBaseURL string `json:"openai_base_url,omitempty"`
-		KeyNote       string `json:"key_note,omitempty"`
+		// Auth, Answered and the three capability arrays are the fields the home
+		// page's own field strip promises every model carries. They are derived
+		// from data already on the row rather than fetched again, so the page and
+		// the payload cannot disagree about what was measured.
+		Auth            string   `json:"auth"`
+		Answered        string   `json:"answered"`
+		Proved          []string `json:"proved"`
+		ClaimedUnproved []string `json:"claimed_unproved"`
+		Failed          []string `json:"failed"`
+		KeyNote         string   `json:"key_note,omitempty"`
 	}{
-		payload:       payload(m),
-		OpenAIBaseURL: openAIBaseIfCompatible(m),
-		KeyNote:       keyNoteFor(m),
+		payload:         payload(m),
+		OpenAIBaseURL:   openAIBaseIfCompatible(m),
+		Auth:            m.Auth(),
+		Answered:        m.Answered(),
+		Proved:          m.Proved(),
+		ClaimedUnproved: m.ClaimedUnproved(),
+		Failed:          m.Failed(),
+		KeyNote:         keyNoteFor(m),
 	})
 }
 
@@ -438,8 +526,16 @@ func WorkingModelsMatching(
 		arguments = append(arguments, query.Endpoint)
 	}
 	if query.Search != "" {
-		conditions = append(conditions, `m.model_id ILIKE ? ESCAPE '\'`)
-		arguments = append(arguments, escapeLikePattern(query.Search))
+		// Model id, endpoint slug and base URL, because the box says "model or
+		// provider" and because somebody who read "groq" in a row and typed it
+		// back expects the rows from groq. Searching only the model id answered
+		// that with an empty table, which reads as an outage rather than as a
+		// filter that looks somewhere else.
+		conditions = append(conditions, `(m.model_id ILIKE ? ESCAPE '\'
+			OR e.slug ILIKE ? ESCAPE '\'
+			OR e.base_url ILIKE ? ESCAPE '\')`)
+		pattern := escapeLikePattern(query.Search)
+		arguments = append(arguments, pattern, pattern, pattern)
 	}
 	// Every named feature has to be verified working, so the count of matching
 	// verdicts has to equal the count asked for. With nothing asked for the

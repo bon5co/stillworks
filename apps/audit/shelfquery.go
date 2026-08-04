@@ -18,6 +18,16 @@ const (
 	endpointParameter      = "endpoint"
 	searchParameter        = "q"
 	keylessParameter       = "keyless"
+	// keyParameter is the auth filter the one shelf offers and the API accepts:
+	// none, key, any. It is spelled the same in both places because the page
+	// tells visitors that its own address is the API's, and a control whose
+	// parameter has a different name there makes that sentence false.
+	keyParameter = "key"
+	// openParameter names the row whose drawer is expanded, as slug:model_id.
+	// It is URL state rather than script state for the same reason the sort is:
+	// a row opened on a page with no JavaScript has to open, and a link to a
+	// specific model's snippet has to survive being pasted somewhere.
+	openParameter = "open"
 	// featureParameter is spelled the same as the API's, and means the same
 	// thing, because the page tells visitors to use it. The HTML accepted it
 	// silently and ignored it for the whole of the shelf's first day: every
@@ -64,6 +74,23 @@ type sortColumn struct {
 	selectExpression string
 }
 
+// bestOrder is the shelf's default ordering, and the one thing on this page
+// that is not a column you can click.
+//
+// No key needed comes first, unconditionally: a row that needs no signup beats
+// a faster one that does, and the whole claim of this site is that the keyless
+// shelf is the interesting one. Then how much of the last week the endpoint
+// actually answered, then how fast it answered. Latency last, because a fast
+// endpoint that refuses half the time is not a better answer than a slower one
+// that always works -- which is the ordering mistake every other free-LLM list
+// makes by sorting on the number it happens to have.
+//
+// Unmeasured values sort last in both slots for the reason the other fragments
+// give: "no latency recorded" is not the fastest endpoint.
+const bestOrder = `CASE WHEN auth_mode = 'none' THEN 0 ELSE 1 END ASC, ` +
+	`successes::numeric / NULLIF(attempts, 0) DESC NULLS LAST, ` +
+	`NULLIF(latency_ms, 0) ASC NULLS LAST`
+
 // workingSorts covers the "Working right now" table. Every fragment names an
 // output column of the inner query, which is why that query is wrapped in a
 // subselect: latency has to be re-expressed as NULLIF to sort, and an alias
@@ -73,6 +100,14 @@ type sortColumn struct {
 // recorded" is not the fastest endpoint, and putting it first under ?order=asc
 // would make the table lie at a glance.
 var workingSorts = map[string]sortColumn{
+	// The default. Both directions are the same fragment: "best" is not a
+	// column heading and there is nothing to flip, so a hand-typed ?order=asc
+	// cannot quietly invert the shelf's own recommendation.
+	"best": {
+		ascending:    bestOrder,
+		descending:   bestOrder,
+		defaultOrder: orderDescending,
+	},
 	"model": {
 		ascending:    "model_id ASC",
 		descending:   "model_id DESC",
@@ -163,20 +198,18 @@ var endpointSorts = map[string]sortColumn{
 	},
 }
 
-// The working table defaults to reliability, not freshness.
+// The table defaults to "best", not to any column on it.
 //
 // It shipped sorted by last verification, which churned: the top row changed
 // twice inside ninety seconds during a review, once to a model that had
-// answered three of its last five checks. That row was also the one the page's
-// only copyable snippet was built from, so the single thing a visitor was
-// invited to paste was whichever model happened to have been probed most
-// recently. Reliability moves much more slowly and is the property somebody
-// choosing an endpoint actually wants, so it decides both the order and the
-// snippet.
+// answered three of its last five checks. Reliability replaced it, and now
+// carries a keyless-first tier in front of it, because the two shelves became
+// one table: without that tier a keyed row with a perfect record on our own
+// credential would sit above every endpoint anybody can call for nothing.
 //
 // The endpoint table keeps its original default.
 const (
-	defaultWorkingSort  = "reliability"
+	defaultWorkingSort  = "best"
 	defaultEndpointSort = "keyless"
 )
 
@@ -195,6 +228,17 @@ type ShelfQuery struct {
 	Endpoint string
 	Search   string
 	Keyless  string
+	// Key narrows the table to one auth mode: "none", "key", or "any". Empty
+	// means the question was not asked, which the page reads as "any" and the
+	// runtime API reads as "none" -- see AuthFilter and requestedAuthMode. The
+	// two defaults differ on purpose and neither is allowed to drift into the
+	// other: a person looking at a labelled table wants both kinds, and an agent
+	// that wrote /api/llm/up into its code before this parameter existed must
+	// keep receiving the keyless-only answer it was promised.
+	Key string
+	// Open is the row whose drawer is expanded, as "slug:model_id". Model ids
+	// contain colons, so it is split on the first one only.
+	Open string
 	// Features narrows the working table to models where every named capability
 	// was proved by a real call. It is ANDed, like the API's, because an agent
 	// that needs tools and a schema needs one model with both, not two models.
@@ -207,11 +251,9 @@ type ShelfQuery struct {
 	// them silently is what the shelf did with the whole parameter, and a
 	// filter that quietly does nothing is worse than one that refuses.
 	UnknownFeatures []string
-	// Base is the path this state belongs to, so the same sort and filter
-	// machinery serves both shelves without either one linking into the other.
-	// It is set by the route from a constant and never read from the query
-	// string: a URL that could redirect its own controls to the other shelf is
-	// the blurring these two pages exist to prevent.
+	// Base is the path this state belongs to. It is set by the route from a
+	// constant and never read from the query string: a URL that could point its
+	// own controls somewhere else is a control that lies about where it goes.
 	Base string
 }
 
@@ -221,13 +263,109 @@ func (query ShelfQuery) On(base string) ShelfQuery {
 	return query
 }
 
-// basePath falls back to the keyless shelf, which is where this machinery lived
-// before there were two of them.
+// basePath falls back to the one shelf, which is now the whole site.
 func (query ShelfQuery) basePath() string {
 	if query.Base == "" {
-		return keylessShelfPath
+		return shelfPath
 	}
 	return query.Base
+}
+
+// AuthFilter is which rows this state asks for, as the page reads it: an
+// unasked question means every row, each one labelled. The runtime API reads the
+// same empty value as "keyless only" and does it in its own parser, so the two
+// defaults can never be confused for one setting with two spellings.
+func (query ShelfQuery) AuthFilter() string {
+	if query.Key == "" {
+		return AuthModeAny
+	}
+	return query.Key
+}
+
+// KeyChoice is the value a key chip renders itself pressed for. "any" and
+// "unasked" are the same shelf, so the chip that says Any lights up for both.
+func (query ShelfQuery) KeyChoice() string {
+	if query.Key == "" {
+		return AuthModeAny
+	}
+	return query.Key
+}
+
+// parseKey accepts only the three published values. Anything else falls back to
+// the unasked state rather than erroring, for the same reason a mistyped sort
+// key does: a stale link should still show the shelf.
+func parseKey(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case AuthModeNone:
+		return AuthModeNone
+	case AuthModeKey:
+		return AuthModeKey
+	case AuthModeAny:
+		return AuthModeAny
+	default:
+		return ""
+	}
+}
+
+// SplitOpen is the expanded row's endpoint slug and model id. Model ids carry
+// colons -- gpt-oss:20b is one -- and endpoint slugs do not, so the split is on
+// the first colon and the rest is the model.
+func (query ShelfQuery) SplitOpen() (slug string, modelID string) {
+	slug, modelID, _ = strings.Cut(query.Open, ":")
+	return slug, modelID
+}
+
+// IsOpen reports whether this row is the expanded one.
+func (query ShelfQuery) IsOpen(slug, modelID string) bool {
+	return query.Open != "" && query.Open == RowID(slug, modelID)
+}
+
+// RowID is the identifier a row carries in the URL and in the DOM. One function
+// so the link the server writes and the row the script looks up cannot drift.
+func RowID(slug, modelID string) string { return slug + ":" + modelID }
+
+// OpenLink is the address that expands this row, or collapses it when it is
+// already the open one. Every other part of the state rides along, so opening a
+// drawer never silently clears a filter.
+func (query ShelfQuery) OpenLink(slug, modelID string) string {
+	next := query
+	if query.IsOpen(slug, modelID) {
+		next.Open = ""
+	} else {
+		next.Open = RowID(slug, modelID)
+	}
+	return next.URL()
+}
+
+// KeyLink is the address for one of the three key chips.
+func (query ShelfQuery) KeyLink(choice string) string {
+	next := query
+	if choice == AuthModeAny {
+		next.Key = ""
+	} else {
+		next.Key = choice
+	}
+	// A row opened under one filter is not necessarily in the next one, and a
+	// drawer left open on a row that is no longer rendered is a parameter that
+	// does nothing. Same for the capability chips below.
+	next.Open = ""
+	return next.URL()
+}
+
+// FeatureLink toggles one capability chip.
+func (query ShelfQuery) FeatureLink(capability string) string {
+	next := query
+	next.Features = nil
+	for _, feature := range query.Features {
+		if feature != capability {
+			next.Features = append(next.Features, feature)
+		}
+	}
+	if len(next.Features) == len(query.Features) {
+		next.Features = append(next.Features, capability)
+	}
+	next.Open = ""
+	return next.URL()
 }
 
 // ParseShelfQuery reads the query string and discards anything it does not
@@ -239,6 +377,8 @@ func ParseShelfQuery(values url.Values) ShelfQuery {
 		Endpoint:        clipFilter(values.Get(endpointParameter)),
 		Search:          clipFilter(values.Get(searchParameter)),
 		Keyless:         parseKeyless(values.Get(keylessParameter)),
+		Key:             parseKey(values.Get(keyParameter)),
+		Open:            clipOpen(values.Get(openParameter)),
 		Features:        known,
 		UnknownFeatures: unknown,
 	}
@@ -312,6 +452,18 @@ func parseKeyless(value string) string {
 	}
 }
 
+// clipOpen bounds the expanded-row identifier. It is compared against rows that
+// were already fetched and never reaches the database, so the only thing a
+// bound buys is refusing to echo an absurd string back into the HTML. Model ids
+// run long, so it is looser than the filter limit and not the same constant.
+func clipOpen(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 280 {
+		return ""
+	}
+	return value
+}
+
 func clipFilter(value string) string {
 	value = strings.TrimSpace(value)
 	if len(value) > filterTextLimit {
@@ -346,6 +498,7 @@ func orderByFrom(columns map[string]sortColumn, key, order, fallback string) str
 // what it is showing instead of quietly showing less than it claims.
 func (query ShelfQuery) Filtered() bool {
 	return query.Endpoint != "" || query.Search != "" || query.Keyless != "" ||
+		(query.Key != "" && query.Key != AuthModeAny) ||
 		len(query.Features) > 0 || len(query.UnknownFeatures) > 0
 }
 
@@ -378,6 +531,14 @@ func (query ShelfQuery) values() url.Values {
 	}
 	if query.Keyless != "" {
 		values.Set(keylessParameter, query.Keyless)
+	}
+	// "any" is the page's default and is left out, so a shared link carries only
+	// what somebody actually chose.
+	if query.Key != "" && query.Key != AuthModeAny {
+		values.Set(keyParameter, query.Key)
+	}
+	if query.Open != "" {
+		values.Set(openParameter, query.Open)
 	}
 	// One parameter per feature rather than one comma-separated value, so a
 	// checkbox group round-trips through the form unchanged and the address bar
@@ -445,6 +606,32 @@ func (query ShelfQuery) WorkingSortMark(key string) string {
 
 func (query ShelfQuery) EndpointSortMark(key string) string {
 	return sortMark(key, query.EndpointSort, query.EndpointOrder)
+}
+
+// SortedBy, SortDirection and SortArrow dress a column heading. The direction
+// is stated in aria-sort as well as drawn as an arrow, because a table that is
+// sorted and only says so in a glyph is a table a screen reader reads in an
+// order it cannot explain.
+func (query ShelfQuery) SortedBy(key string) bool { return query.WorkingSort == key }
+
+func (query ShelfQuery) SortDirection(key string) string {
+	if !query.SortedBy(key) {
+		return ""
+	}
+	if query.WorkingOrder == orderAscending {
+		return "ascending"
+	}
+	return "descending"
+}
+
+// SortArrow is always rendered, active or not: an arrow that appears only on the
+// sorted column changes the heading's width the moment it is clicked, and every
+// column to its right moves. The inactive ones are dimmed by the stylesheet.
+func (query ShelfQuery) SortArrow(key string) string {
+	if query.SortedBy(key) && query.WorkingOrder == orderDescending {
+		return "▼"
+	}
+	return "▲"
 }
 
 func sortMark(key, currentKey, currentOrder string) string {

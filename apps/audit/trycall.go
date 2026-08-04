@@ -347,3 +347,35 @@ func humanDelay(remaining time.Duration) string {
 	}
 	return fmt.Sprintf("%d minutes", minutes)
 }
+
+// TrySnippet reproduces exactly the request that was just made, as a shell
+// command, so somebody who does not believe the result can run it from their own
+// address rather than reconstruct it. It rides on the API's answer because the
+// answer is the thing most likely to be disbelieved: this server's address is
+// not the caller's, and a per-IP quota is the whole reason the difference
+// matters.
+//
+// Both interpolations are escaped. The command goes to a clipboard and from
+// there into somebody else's shell, and a prompt is a visitor's own text.
+func TrySnippet(result TryResult) string {
+	return fmt.Sprintf(`curl %s \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"%s","messages":[{"role":"user","content":"%s"}],"max_tokens":%d}'`,
+		shellQuote(result.URL), result.Model, escapeForShellJSON(result.Prompt), tryMaxTokens)
+}
+
+// shellQuote keeps a URL a single argument. It is not reachable from a hostile
+// value today -- base_url and chat_path are only ever written from the in-repo
+// seed list, never from a provider's response -- but "not reachable today" is
+// one bad seed row away from running a command on a reader's machine, and
+// quoting costs nothing.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+// escapeForShellJSON keeps a pasted prompt from breaking out of either the JSON
+// string or the surrounding single-quoted shell argument.
+func escapeForShellJSON(prompt string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "'", `'"'"'`, "\n", " ")
+	return replacer.Replace(prompt)
+}

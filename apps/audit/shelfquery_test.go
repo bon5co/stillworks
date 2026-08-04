@@ -173,11 +173,11 @@ func TestSortLinksCarryTheFiltersAlong(t *testing.T) {
 	}
 }
 
-// The unfiltered shelf is /llm/ and nothing else. A default that travels in the
-// URL makes every shared link outlive the default it was written against.
+// The unfiltered shelf is / and nothing else. A default that travels in the URL
+// makes every shared link outlive the default it was written against.
 func TestDefaultStateHasACleanAddress(t *testing.T) {
-	if address := ParseShelfQuery(nil).URL(); address != "/llm/" {
-		t.Fatalf("default URL = %q, want /llm/", address)
+	if address := ParseShelfQuery(nil).URL(); address != "/" {
+		t.Fatalf("default URL = %q, want /", address)
 	}
 	if ParseShelfQuery(nil).Filtered() {
 		t.Fatal("an untouched shelf reports itself as filtered")
@@ -237,8 +237,8 @@ func parseLink(t *testing.T, link string) url.Values {
 	if err != nil {
 		t.Fatalf("sort link %q does not parse: %v", link, err)
 	}
-	if parsed.Path != "/llm/" {
-		t.Fatalf("sort link points at %q, want /llm/", parsed.Path)
+	if parsed.Path != "/" {
+		t.Fatalf("sort link points at %q, want /", parsed.Path)
 	}
 	return parsed.Query()
 }
@@ -314,16 +314,35 @@ func TestEveryCapabilityColumnHasAWorkingSort(t *testing.T) {
 	}
 }
 
-// The shelf's default order decides the top row, and the top row is the snippet
-// the page invites everyone to paste. Freshness churned -- it changed twice in
-// ninety seconds during a review -- so the default is the slower-moving
-// property.
-func TestTheShelfDefaultsToReliabilityRatherThanFreshness(t *testing.T) {
+// The shelf's default order decides the top row, and the top row is the one
+// most visitors will paste. Freshness churned -- it changed twice in ninety
+// seconds during a review -- and plain reliability, once both kinds of endpoint
+// shared one table, put a row that needs a signup above rows anybody can call
+// for nothing. The default is neither: it is a tier, then reliability, then
+// speed, and it is not a column anybody can click away.
+func TestTheShelfDefaultsToKeylessFirstAndNotToAnyColumn(t *testing.T) {
 	query := ParseShelfQuery(nil)
-	if query.WorkingSort != "reliability" {
-		t.Fatalf("default working sort = %q, want reliability", query.WorkingSort)
+	if query.WorkingSort != "best" {
+		t.Fatalf("default working sort = %q, want best", query.WorkingSort)
 	}
 	if query.WorkingOrder != orderDescending {
 		t.Fatalf("default working order = %q, want desc", query.WorkingOrder)
+	}
+	// Both directions are the same fragment, so a hand-typed ?order=asc cannot
+	// invert the shelf's own recommendation.
+	ascending := ParseShelfQuery(url.Values{
+		sortParameter:  []string{"best"},
+		orderParameter: []string{orderAscending},
+	})
+	if ascending.workingOrderBy() != query.workingOrderBy() {
+		t.Fatalf("?order=asc changed the default ordering to %q", ascending.workingOrderBy())
+	}
+	// No key needed is the first thing it sorts on, ahead of any measurement.
+	fragment := query.workingOrderBy()
+	if !strings.HasPrefix(fragment, "CASE WHEN auth_mode = 'none'") {
+		t.Fatalf("the default ordering does not lead with the keyless tier: %q", fragment)
+	}
+	if strings.Index(fragment, "successes") > strings.Index(fragment, "latency_ms") {
+		t.Fatalf("the default ordering puts speed ahead of reliability: %q", fragment)
 	}
 }

@@ -408,27 +408,53 @@ func TestKeyedEndpointsAreNotTestCallable(t *testing.T) {
 	}
 }
 
-// Each shelf's own controls have to stay on that shelf. A sort link that walked
-// a visitor from the keyed page to the keyless one, carrying its filters, would
-// silently answer a different question from the one they asked.
-func TestShelfControlsStayOnTheirOwnShelf(t *testing.T) {
-	keyed := ParseShelfQuery(url.Values{searchParameter: []string{"llama"}}).On(keyedShelfPath)
-	if address := keyed.URL(); !strings.HasPrefix(address, keyedShelfPath) {
-		t.Fatalf("keyed shelf URL = %q, want a %s prefix", address, keyedShelfPath)
+// Every control on the shelf points back at the shelf, carrying the state it
+// was holding. A control that dropped a filter would silently widen the table
+// under somebody who had just narrowed it, and one that pointed anywhere else
+// would answer a different question from the one that was asked.
+func TestShelfControlsStayOnTheShelfAndCarryTheirState(t *testing.T) {
+	query := ParseShelfQuery(url.Values{
+		searchParameter:  []string{"llama"},
+		featureParameter: []string{CapabilityTools},
+		keyParameter:     []string{AuthModeKey},
+	}).On(shelfPath)
+
+	for name, link := range map[string]string{
+		"shelf":   query.URL(),
+		"sort":    query.WorkingSortLink("latency"),
+		"open":    query.OpenLink("groq", "llama-3.1-8b-instant"),
+		"key":     query.KeyLink(AuthModeNone),
+		"feature": query.FeatureLink(CapabilityVision),
+	} {
+		if !strings.HasPrefix(link, shelfPath) {
+			t.Errorf("%s link = %q, want a %s prefix", name, link, shelfPath)
+		}
+		if strings.Contains(link, "/llm/") {
+			t.Errorf("%s link points at a retired shelf: %q", name, link)
+		}
+		// The search survives every one of them. The key filter deliberately
+		// does not survive its own chip, and the feature filter does not survive
+		// its own chip, which is what makes those chips toggles.
+		if parsed := parseLink(t, link); parsed.Get(searchParameter) != "llama" {
+			t.Errorf("%s link lost the search: %q", name, link)
+		}
 	}
-	if link := keyed.WorkingSortLink("latency"); !strings.HasPrefix(link, keyedShelfPath) {
-		t.Fatalf("keyed sort link = %q, want a %s prefix", link, keyedShelfPath)
+
+	// Opening a row is state, not a filter: it rides in the URL so a link to one
+	// model's snippet survives being pasted somewhere, and clicking the same
+	// caret again closes it.
+	opened := ParseShelfQuery(parseLink(t, query.OpenLink("groq", "gpt-oss:20b")))
+	if slug, model := opened.SplitOpen(); slug != "groq" || model != "gpt-oss:20b" {
+		t.Fatalf("open round-tripped as %q/%q, want groq/gpt-oss:20b", slug, model)
 	}
-	if link := keyed.EndpointSortLink("checked"); !strings.HasPrefix(link, keyedShelfPath) {
-		t.Fatalf("keyed endpoint sort link = %q, want a %s prefix", link, keyedShelfPath)
+	if closed := opened.OpenLink("groq", "gpt-oss:20b"); strings.Contains(closed, openParameter+"=") {
+		t.Fatalf("clicking the open row again did not close it: %q", closed)
 	}
-	// The keyless shelf keeps the address it has always had, so links already
-	// shared into chat windows keep meaning what they meant.
-	if address := ParseShelfQuery(nil).URL(); address != keylessShelfPath {
-		t.Fatalf("keyless shelf URL = %q, want %q", address, keylessShelfPath)
-	}
-	if address := ParseShelfQuery(nil).On(keylessShelfPath).URL(); address != keylessShelfPath {
-		t.Fatalf("explicit keyless shelf URL = %q, want %q", address, keylessShelfPath)
+
+	// A key chip clears the open row rather than carrying it: a drawer left open
+	// on a row the new filter does not render is a parameter that does nothing.
+	if link := query.KeyLink(AuthModeNone); strings.Contains(link, openParameter+"=") {
+		t.Fatalf("the key chip carried an open row into a different filter: %q", link)
 	}
 }
 
