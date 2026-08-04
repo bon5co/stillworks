@@ -83,19 +83,23 @@ func (p *Prober) probeChatCapability(
 	if err != nil {
 		probe.Outcome = OutcomeBadBody
 		probe.Error = err.Error()
-		return capabilityResult{Probe: probe}
+		return capabilityResult{Probe: p.scrub(endpoint, probe)}
 	}
-	status, payload, err := p.do(ctx, http.MethodPost, joinURL(endpoint.BaseURL, endpoint.ChatPath), body)
+	status, payload, err := p.do(
+		ctx, endpoint, http.MethodPost, joinURL(endpoint.BaseURL, endpoint.ChatPath), body)
 	probe.HTTPStatus = status
 	probe.LatencyMS = int(p.now().Sub(started).Milliseconds())
 	probe.Outcome = classify(status, payload, err)
 	if err != nil {
 		probe.Error = err.Error()
-		return capabilityResult{Probe: probe}
+		return capabilityResult{Probe: p.scrub(endpoint, probe)}
 	}
 	if probe.Outcome != OutcomeOK {
 		probe.Error = firstLine(payload)
-		return capabilityResult{Probe: probe, Supported: refusalVerdict(probe.Outcome, status, true)}
+		return capabilityResult{
+			Probe:     p.scrub(endpoint, probe),
+			Supported: refusalVerdict(probe.Outcome, status, true),
+		}
 	}
 	// A 200 that did not do the thing is a real negative, not an error, so the
 	// outcome stays "ok": the endpoint answered, it just answered without a
@@ -104,7 +108,7 @@ func (p *Prober) probeChatCapability(
 	verdict, detail := verifyCapability(capability, payload)
 	probe.Error = detail
 	probe.CompletionChars = len(payload)
-	return capabilityResult{Probe: probe, Supported: verdict}
+	return capabilityResult{Probe: p.scrub(endpoint, probe), Supported: verdict}
 }
 
 // refusalVerdict decides what a non-200 says about a capability. Only a
@@ -467,32 +471,35 @@ func (p *Prober) probeImageGeneration(
 	if err != nil {
 		probe.Outcome = OutcomeBadBody
 		probe.Error = err.Error()
-		return capabilityResult{Probe: probe}
+		return capabilityResult{Probe: p.scrub(endpoint, probe)}
 	}
 	status, header, payload, truncated, err := p.doRaw(
-		ctx, p.imageClient(), method, target, body, imageResponseLimit)
+		ctx, p.imageClient(), p.credentialFor(endpoint, target), method, target, body, imageResponseLimit)
 	probe.HTTPStatus = status
 	probe.LatencyMS = int(p.now().Sub(started).Milliseconds())
 	probe.Outcome = classify(status, payload, err)
 	if err != nil {
 		probe.Error = err.Error()
-		return capabilityResult{Probe: probe}
+		return capabilityResult{Probe: p.scrub(endpoint, probe)}
 	}
 	if truncated {
 		// We stopped reading, so we cannot say what the provider sent. That is
 		// our limit, not their failure.
 		probe.Outcome = OutcomeBadBody
 		probe.Error = "response exceeded the probe's read limit"
-		return capabilityResult{Probe: probe}
+		return capabilityResult{Probe: p.scrub(endpoint, probe)}
 	}
 	if probe.Outcome != OutcomeOK {
 		probe.Error = firstLine(payload)
-		return capabilityResult{Probe: probe, Supported: refusalVerdict(probe.Outcome, status, false)}
+		return capabilityResult{
+			Probe:     p.scrub(endpoint, probe),
+			Supported: refusalVerdict(probe.Outcome, status, false),
+		}
 	}
 	verdict, detail := verifyImageBytes(header.Get("Content-Type"), payload)
 	probe.Error = detail
 	probe.CompletionChars = len(payload)
-	return capabilityResult{Probe: probe, Supported: verdict}
+	return capabilityResult{Probe: p.scrub(endpoint, probe), Supported: verdict}
 }
 
 func imageRequest(endpoint Endpoint, model string) (method, target string, body []byte, err error) {

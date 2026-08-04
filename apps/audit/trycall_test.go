@@ -134,12 +134,18 @@ func TestBrowserCallOriginsAreBareOrigins(t *testing.T) {
 		}
 		seen[origin] = struct{}{}
 	}
-	// Every seeded endpoint has to be reachable from the page, or its button
-	// silently falls back to the server route.
+	// Every seeded keyless endpoint has to be reachable from the page, or its
+	// button silently falls back to the server route. Keyed endpoints have no
+	// button -- the call would be made on our credential -- so they are absent
+	// from the policy on purpose, and TestBrowserCallOriginsExcludeKeyedProviders
+	// asserts that side of it.
 	for _, endpoint := range SeedEndpoints {
+		if endpoint.RequiresKey() {
+			continue
+		}
 		parsed, _ := url.Parse(endpoint.BaseURL)
 		if _, present := seen[parsed.Scheme+"://"+parsed.Host]; !present {
-			t.Errorf("seeded endpoint %s is missing from the policy", endpoint.Slug)
+			t.Errorf("seeded keyless endpoint %s is missing from the policy", endpoint.Slug)
 		}
 	}
 }
