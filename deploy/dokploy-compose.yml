@@ -17,6 +17,13 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       DEBUG: "false"
       PORT: "8000"
+      # The address this deployment is reached under, for the canonical link and
+      # the social card. Exactly scheme://host -- a trailing slash is refused at
+      # startup, because the alternative is every HTML page answering 200 with an
+      # empty body while the health check stays green. Unset is safe: the site
+      # serves normally and publishes no card rather than resolving one against
+      # the client's own Host header. See deploy/README.md.
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
       # Requests from here are our own work -- deploy checks, browser tests,
       # the machine this is built on -- and are recorded but never counted.
       # Without it the numbers that decide whether this project continues are

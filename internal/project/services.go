@@ -26,6 +26,34 @@ type RuntimeSettings struct {
 	// request counts as a visitor, which is how the first day reported fifteen
 	// of them and meant none.
 	InternalNetworks string
+	// TrustProxyHeaders says whether the framework believes X-Forwarded-For and
+	// X-Forwarded-Proto. It governs web.RemoteIP and web.RequestScheme, which is
+	// what the framework's CSRF origin check and login redirect read.
+	//
+	// It does not currently govern who this application thinks a visitor is.
+	// audit.clientIP reads CF-Connecting-IP, X-Forwarded-For and X-Real-IP
+	// directly and unconditionally -- it predates this setting, and the traffic
+	// counts and the per-visitor test-call limit are keyed on it. Turning this on
+	// neither protects nor exposes those; they are spoofable either way, and
+	// making them read web.RemoteIP is a separate change with its own effect on
+	// the published numbers.
+	//
+	// Off by default, and it should stay off on any port something other than
+	// the proxy can open a connection to. TrustAnyPeer's guarantee is
+	// topological, and this deployment shares a Docker network with unrelated
+	// stacks, so the guarantee does not hold there. The one thing it would buy --
+	// an https scheme in the document head behind a TLS-terminating proxy --
+	// PublicOrigin buys outright and without trusting anybody.
+	TrustProxyHeaders bool
+	// PublicOrigin is the scheme and host this deployment is reached under, for
+	// example https://stillworks.supercapybara.com. Exactly scheme://host[:port]:
+	// a path, a query or a trailing slash is refused at startup rather than
+	// turning every page into an empty 200.
+	//
+	// It is what canonical and og:image URLs resolve against. Left empty, this
+	// site publishes neither rather than resolving them against the Host header,
+	// which is the client's own text.
+	PublicOrigin string
 }
 
 func LoadDatabaseSettings() (DatabaseSettings, error) {
@@ -55,6 +83,8 @@ func LoadRuntimeSettings() (RuntimeSettings, error) {
 		env.Optional("DEBUG", &settings.Debug, false),
 		env.Optional("PORT", &settings.Port, 8000),
 		env.Optional("INTERNAL_NETWORKS", &settings.InternalNetworks, ""),
+		env.Optional("TRUST_PROXY_HEADERS", &settings.TrustProxyHeaders, false),
+		env.Optional("PUBLIC_ORIGIN", &settings.PublicOrigin, ""),
 	)
 	if err := schema.Load(env.WithWorkingDirectory(root)); err != nil {
 		return RuntimeSettings{}, err

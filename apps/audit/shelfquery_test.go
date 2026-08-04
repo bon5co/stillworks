@@ -61,13 +61,20 @@ func TestSortKeysAreCaseAndSpaceInsensitive(t *testing.T) {
 // output column. A key added to the map with a typo in its SQL would otherwise
 // only fail on the request that used it.
 func TestEverySortFragmentNamesAKnownColumn(t *testing.T) {
-	workingColumns := []string{"model_id", "slug", "latency_ms", "successes", "attempts", "last_ok"}
+	// sort_value is a real output column too, but only for a key that brings the
+	// expression producing it. The two have to travel together: a fragment
+	// naming it without one would order by a column the select never emitted,
+	// and an expression nobody orders by would be dead weight in every query.
+	workingColumns := []string{"model_id", "slug", "latency_ms", "successes", "attempts", "last_ok", "sort_value"}
 	endpointColumns := []string{"slug", "latency_ms", "checked_at", "models_listed", "working_models"}
 	check := func(t *testing.T, fragments map[string]sortColumn, columns []string) {
 		for key, column := range fragments {
 			for _, fragment := range []string{column.ascending, column.descending} {
 				if !mentionsAny(fragment, columns) {
 					t.Errorf("%s: fragment %q names no known column", key, fragment)
+				}
+				if strings.Contains(fragment, "sort_value") != (column.selectExpression != "") {
+					t.Errorf("%s: fragment %q and its select expression disagree about sort_value", key, fragment)
 				}
 			}
 			if column.defaultOrder != orderAscending && column.defaultOrder != orderDescending {
@@ -234,4 +241,89 @@ func parseLink(t *testing.T, link string) url.Values {
 		t.Fatalf("sort link points at %q, want /llm/", parsed.Path)
 	}
 	return parsed.Query()
+}
+
+// The page's own prose tells visitors to filter by capability. The HTML parsed
+// ?feature=, discarded it, and returned every row -- so ?feature=tools read as
+// "all twenty-three of these do tool calling". Parsing has to keep it.
+func TestFeatureFilterSurvivesParsing(t *testing.T) {
+	query := ParseShelfQuery(url.Values{
+		featureParameter: []string{"tools,json_schema", "vision"},
+	})
+	want := []string{CapabilityTools, CapabilityJSONSchema, CapabilityVision}
+	if len(query.Features) != len(want) {
+		t.Fatalf("Features = %v, want %v", query.Features, want)
+	}
+	for index, name := range want {
+		if query.Features[index] != name {
+			t.Fatalf("Features = %v, want %v", query.Features, want)
+		}
+	}
+	if len(query.UnknownFeatures) != 0 {
+		t.Fatalf("UnknownFeatures = %v, want none", query.UnknownFeatures)
+	}
+	if !query.Filtered() {
+		t.Fatal("a shelf narrowed to three capabilities does not consider itself filtered")
+	}
+}
+
+// A name we publish no verdict for is kept rather than dropped, so the page can
+// say the filter did not apply. Silently ignoring it is the behaviour being
+// fixed; silently matching nothing would be worse still, because "no model
+// supports tols" is a true sentence that sends somebody hunting an outage.
+func TestUnknownFeaturesAreKeptSoThePageCanSaySo(t *testing.T) {
+	query := ParseShelfQuery(url.Values{
+		featureParameter: []string{"tools", "tols", "image_out", "tols"},
+	})
+	if len(query.Features) != 1 || query.Features[0] != CapabilityTools {
+		t.Fatalf("Features = %v, want just tools", query.Features)
+	}
+	// image_out is refused with the typo: it belongs to models that draw, and
+	// the working table holds models that chat, so it could only ever empty it.
+	if len(query.UnknownFeatures) != 2 {
+		t.Fatalf("UnknownFeatures = %v, want tols and image_out once each", query.UnknownFeatures)
+	}
+}
+
+// The filter has to survive a round trip through its own URL, or a second
+// filter silently drops the first.
+func TestFeatureFilterRoundTripsThroughTheURL(t *testing.T) {
+	first := ParseShelfQuery(url.Values{featureParameter: []string{"tools", "vision"}}).On(keylessShelfPath)
+	parsed, err := url.Parse(first.URL())
+	if err != nil {
+		t.Fatalf("URL() produced something unparseable: %v", err)
+	}
+	second := ParseShelfQuery(parsed.Query())
+	if len(second.Features) != 2 || !second.HasFeature(CapabilityTools) || !second.HasFeature(CapabilityVision) {
+		t.Fatalf("round trip lost the filter: %v -> %q -> %v", first.Features, first.URL(), second.Features)
+	}
+}
+
+// Every capability column is sortable, and the sort a heading links to is one
+// the parser accepts. A heading pointing at a key ParseShelfQuery rejects would
+// silently fall back to the default and look like a dead control.
+func TestEveryCapabilityColumnHasAWorkingSort(t *testing.T) {
+	for _, capability := range ChatCapabilities {
+		query := ParseShelfQuery(url.Values{sortParameter: []string{capability}})
+		if query.WorkingSort != capability {
+			t.Errorf("?sort=%s parsed as %q", capability, query.WorkingSort)
+		}
+		if query.workingSortValue() == "" {
+			t.Errorf("%s sorts on sort_value but supplies no expression to produce it", capability)
+		}
+	}
+}
+
+// The shelf's default order decides the top row, and the top row is the snippet
+// the page invites everyone to paste. Freshness churned -- it changed twice in
+// ninety seconds during a review -- so the default is the slower-moving
+// property.
+func TestTheShelfDefaultsToReliabilityRatherThanFreshness(t *testing.T) {
+	query := ParseShelfQuery(nil)
+	if query.WorkingSort != "reliability" {
+		t.Fatalf("default working sort = %q, want reliability", query.WorkingSort)
+	}
+	if query.WorkingOrder != orderDescending {
+		t.Fatalf("default working order = %q, want desc", query.WorkingOrder)
+	}
 }

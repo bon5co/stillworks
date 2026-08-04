@@ -95,7 +95,7 @@ func (p *Prober) probeChatCapability(
 		return capabilityResult{Probe: p.scrub(endpoint, probe)}
 	}
 	if probe.Outcome != OutcomeOK {
-		probe.Error = firstLine(payload)
+		probe.Error = reasonFrom(payload)
 		return capabilityResult{
 			Probe:     p.scrub(endpoint, probe),
 			Supported: refusalVerdict(probe.Outcome, status, true),
@@ -490,7 +490,7 @@ func (p *Prober) probeImageGeneration(
 		return capabilityResult{Probe: p.scrub(endpoint, probe)}
 	}
 	if probe.Outcome != OutcomeOK {
-		probe.Error = firstLine(payload)
+		probe.Error = reasonFrom(payload)
 		return capabilityResult{
 			Probe:     p.scrub(endpoint, probe),
 			Supported: refusalVerdict(probe.Outcome, status, false),
@@ -589,7 +589,7 @@ func verifyImageBytes(contentType string, payload []byte) (*bool, string) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return supportedFalse(), "neither image bytes nor an images envelope: " + firstLine(payload)
+		return supportedFalse(), "neither image bytes nor an images envelope: " + reasonFrom(payload)
 	}
 	if len(envelope.Data) == 0 {
 		return supportedFalse(), "images envelope carried no data"

@@ -224,7 +224,7 @@ func (runner *TryRunner) Run(
 		return result, nil
 	}
 	if result.Outcome != OutcomeOK {
-		result.Detail = firstLine(payload)
+		result.Detail = reasonFrom(payload)
 		return result, nil
 	}
 	answer, parseErr := parseCompletion(payload)

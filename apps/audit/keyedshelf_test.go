@@ -558,6 +558,7 @@ func TestKeyedSnippetAsksForTheReadersOwnKey(t *testing.T) {
 	keyed := snippet(WorkingModel{
 		Slug: "groq", AuthMode: AuthModeKey, ModelID: "llama-3.3-70b",
 		BaseURL: "https://api.groq.com", ChatPath: "/openai/v1/chat/completions",
+		OpenAICompatible: true, ChatCapable: true,
 	})
 	if !strings.Contains(keyed, "Authorization: Bearer YOUR_GROQ_API_KEY") {
 		t.Fatalf("keyed snippet carries no placeholder credential:\n%s", keyed)
@@ -565,6 +566,7 @@ func TestKeyedSnippetAsksForTheReadersOwnKey(t *testing.T) {
 	keyless := snippet(WorkingModel{
 		Slug: "llm7", AuthMode: AuthModeNone, ModelID: "gpt-oss:20b",
 		BaseURL: "https://api.llm7.io", ChatPath: "/v1/chat/completions",
+		OpenAICompatible: true, ChatCapable: true,
 	})
 	if strings.Contains(keyless, "Authorization") {
 		t.Fatalf("keyless snippet grew an Authorization header:\n%s", keyless)
@@ -584,5 +586,138 @@ func TestCapabilityQuestionsFollowTheEndpointsOwnVerdict(t *testing.T) {
 	crossed := Model{ModelID: "llama-3.3-70b", ChatCapable: true, Keyless: &yes}
 	if got := applicableCapabilities(keyedEndpoint(), crossed); got != nil {
 		t.Fatalf("a keyless verdict qualified a model on the keyed shelf: %v", got)
+	}
+}
+
+// The shelf's "Paste this" block is built from EnvLines and snippet, the same
+// two functions the API's ?format=env output uses. On the keyed shelf both have
+// to emit a placeholder: our own free-tier key is never rendered on this site,
+// and a block that looked complete would be pasted into a project and fail on
+// the first call with nothing on screen to explain why.
+//
+// This is covered here rather than in a browser because a deployment holding no
+// key for a provider has no verified keyed rows to render, so the live page
+// cannot reach this branch without a real credential.
+func TestThePasteBlockNeverRendersOurOwnKey(t *testing.T) {
+	const secret = "gsk_thisisoursandmustneverappear"
+	keyed := WorkingModel{
+		Slug:             "groq",
+		BaseURL:          "https://api.groq.com",
+		ChatPath:         "/openai/v1/chat/completions",
+		AuthMode:         AuthModeKey,
+		ModelID:          "llama-3.1-8b-instant",
+		OpenAICompatible: true,
+		ChatCapable:      true,
+	}
+	for name, rendered := range map[string]string{"env": EnvLines(keyed), "curl": snippet(keyed)} {
+		if strings.Contains(rendered, secret) {
+			t.Fatalf("%s block rendered a real key: %q", name, rendered)
+		}
+		if !strings.Contains(strings.ToLower(rendered), "your") {
+			t.Fatalf("%s block does not mark the key as the reader's to supply: %q", name, rendered)
+		}
+	}
+	// The base URL is the one an OpenAI client can be handed, not the bare
+	// host: Groq mounts its OpenAI surface under /openai/v1.
+	if !strings.Contains(EnvLines(keyed), "OPENAI_BASE_URL=https://api.groq.com/openai/v1\n") {
+		t.Fatalf("keyed env block has the wrong base URL: %q", EnvLines(keyed))
+	}
+
+	// The keyless block says the opposite, in the strongest form: not a
+	// placeholder, but that no header should be sent at all.
+	keyless := keyed
+	keyless.AuthMode = AuthModeNone
+	keyless.Slug = "pollinations"
+	keyless.BaseURL = "https://text.pollinations.ai"
+	keyless.ChatPath = "/openai"
+	if !strings.Contains(EnvLines(keyless), "OPENAI_API_KEY=not-needed") {
+		t.Fatalf("keyless env block should say the key is not needed: %q", EnvLines(keyless))
+	}
+	if strings.Contains(snippet(keyless), "Authorization") {
+		t.Fatalf("keyless snippet must carry no Authorization header at all: %q", snippet(keyless))
+	}
+}
+
+// EnvLines is what /api/llm/up?format=env emits and what the page prints. One
+// function, so the page cannot drift from the API -- the page printing its own
+// derivation is what put a base URL on every endpoint page that answers 404.
+func TestThePageAndTheAPIShareOneEnvDerivation(t *testing.T) {
+	model := WorkingModel{
+		Slug:             "ovh-anonymous",
+		BaseURL:          "https://oai.endpoints.kepler.ai.cloud.ovh.net",
+		ChatPath:         "/v1/chat/completions",
+		AuthMode:         AuthModeNone,
+		ModelID:          "Mistral-7B-Instruct-v0.3",
+		OpenAICompatible: true,
+		ChatCapable:      true,
+	}
+	response := httptest.NewRecorder()
+	writeEnv(response, []WorkingModel{model})
+	if !strings.Contains(response.Body.String(), EnvLines(model)) {
+		t.Fatalf("format=env output does not contain the block the page prints:\napi:  %q\npage: %q",
+			response.Body.String(), EnvLines(model))
+	}
+	// And that block carries the /v1 the provider's own documented host omits.
+	if !strings.Contains(EnvLines(model), "kepler.ai.cloud.ovh.net/v1\n") {
+		t.Fatalf("base URL lost its version prefix: %q", EnvLines(model))
+	}
+}
+
+// Which body an endpoint speaks and whether it needs a credential are separate
+// questions, and the snippet has to get all four combinations right. Nesting
+// them dropped the Authorization line from an endpoint that was both Ollama-
+// shaped and key-required -- a snippet that cannot work, on a shelf whose whole
+// claim is that what it publishes was actually called.
+func TestTheSnippetAsksTheShapeAndTheKeyQuestionsSeparately(t *testing.T) {
+	base := WorkingModel{ModelID: "tinyllama", BaseURL: "https://example.test", ChatPath: "/api/generate", Slug: "some-host"}
+	openAI := WorkingModel{ModelID: "gpt-oss", BaseURL: "https://example.test", ChatPath: "/v1/chat/completions", Slug: "some-host"}
+
+	cases := []struct {
+		name       string
+		model      WorkingModel
+		wantBody   string
+		wantAuth   bool
+		rejectBody string
+	}{
+		{
+			name:       "ollama shaped, no key",
+			model:      func() WorkingModel { m := base; m.AuthMode = AuthModeNone; return m }(),
+			wantBody:   `"prompt":"hello"`,
+			rejectBody: `"messages"`,
+		},
+		{
+			name:       "ollama shaped, key required",
+			model:      func() WorkingModel { m := base; m.AuthMode = AuthModeKey; return m }(),
+			wantBody:   `"prompt":"hello"`,
+			wantAuth:   true,
+			rejectBody: `"messages"`,
+		},
+		{
+			name:       "openai shaped, no key",
+			model:      func() WorkingModel { m := openAI; m.AuthMode = AuthModeNone; m.OpenAICompatible = true; return m }(),
+			wantBody:   `"messages"`,
+			rejectBody: `"prompt"`,
+		},
+		{
+			name:       "openai shaped, key required",
+			model:      func() WorkingModel { m := openAI; m.AuthMode = AuthModeKey; m.OpenAICompatible = true; return m }(),
+			wantBody:   `"messages"`,
+			wantAuth:   true,
+			rejectBody: `"prompt"`,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := snippet(testCase.model)
+			if !strings.Contains(got, testCase.wantBody) {
+				t.Fatalf("snippet body is the wrong shape, want %s:\n%s", testCase.wantBody, got)
+			}
+			if strings.Contains(got, testCase.rejectBody) {
+				t.Fatalf("snippet body carries %s, which this endpoint does not speak:\n%s", testCase.rejectBody, got)
+			}
+			if hasAuth := strings.Contains(got, "Authorization"); hasAuth != testCase.wantAuth {
+				t.Fatalf("Authorization header present=%v, want %v:\n%s", hasAuth, testCase.wantAuth, got)
+			}
+		})
 	}
 }

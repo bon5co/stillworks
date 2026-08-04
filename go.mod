@@ -3,12 +3,13 @@ module stillworks
 go 1.26.5
 
 require (
-	github.com/bon5co/godjango v0.0.0-20260804023704-d971af4f5168
+	github.com/a-h/templ v0.3.1020
+	github.com/bon5co/godjango v0.0.0-20260804043623-b9d92bb831a5
 	github.com/go-chi/chi/v5 v5.3.1
+	github.com/uptrace/bun v1.2.18
 )
 
 require (
-	github.com/a-h/templ v0.3.1020 // indirect
 	github.com/alexedwards/scs/v2 v2.9.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -21,7 +22,6 @@ require (
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/tmthrgd/go-hex v0.0.0-20190904060850-447a3041c3bc // indirect
-	github.com/uptrace/bun v1.2.18 // indirect
 	github.com/uptrace/bun/dialect/pgdialect v1.2.18 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect

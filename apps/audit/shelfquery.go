@@ -2,6 +2,7 @@ package audit
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -17,6 +18,12 @@ const (
 	endpointParameter      = "endpoint"
 	searchParameter        = "q"
 	keylessParameter       = "keyless"
+	// featureParameter is spelled the same as the API's, and means the same
+	// thing, because the page tells visitors to use it. The HTML accepted it
+	// silently and ignored it for the whole of the shelf's first day: every
+	// row came back for ?feature=tools, so the page read as though all
+	// twenty-three models did tool calling.
+	featureParameter = "feature"
 )
 
 const (
@@ -47,6 +54,14 @@ type sortColumn struct {
 	// and freshness wants newest first, so a single global default would be
 	// wrong half the time.
 	defaultOrder string
+	// selectExpression is added to the inner select as sort_value when this key
+	// is active, for a sort whose value is not already a column of that select.
+	// The capability columns need it: a feature verdict lives in another table,
+	// and a correlated subquery cannot be reached from the outer ORDER BY.
+	//
+	// It is a fixed string in this table like every other fragment here, so the
+	// same rule holds: nothing a visitor types becomes SQL.
+	selectExpression string
 }
 
 // workingSorts covers the "Working right now" table. Every fragment names an
@@ -75,9 +90,13 @@ var workingSorts = map[string]sortColumn{
 	},
 	// Reliability is a ratio, tie-broken by how many attempts produced it. Ten
 	// of ten and one of one are both 100%, and they are not the same claim.
+	// Freshness is the final tie-break rather than the first sort key. Ten of
+	// ten and one of one are both a perfect record and are not the same claim,
+	// so attempts decides between them; only after that does the clock.
 	"reliability": {
-		ascending:    "successes::numeric / NULLIF(attempts, 0) ASC NULLS LAST, attempts ASC",
-		descending:   "successes::numeric / NULLIF(attempts, 0) DESC NULLS LAST, attempts DESC",
+		ascending: "successes::numeric / NULLIF(attempts, 0) ASC NULLS LAST, attempts ASC, last_ok DESC NULLS LAST",
+		descending: "successes::numeric / NULLIF(attempts, 0) DESC NULLS LAST, attempts DESC, " +
+			"last_ok DESC NULLS LAST",
 		defaultOrder: orderDescending,
 	},
 	"verified": {
@@ -85,6 +104,27 @@ var workingSorts = map[string]sortColumn{
 		descending:   "last_ok DESC NULLS LAST",
 		defaultOrder: orderDescending,
 	},
+	// One entry per capability column, so a heading that shows a verdict can
+	// also order by it. supported is a tri-state, and DESC NULLS LAST is
+	// exactly the reading order the column wants: proved, then refused, then
+	// never established.
+	CapabilityTools:      capabilitySort(CapabilityTools),
+	CapabilityJSONSchema: capabilitySort(CapabilityJSONSchema),
+	CapabilityJSONObject: capabilitySort(CapabilityJSONObject),
+	CapabilityVision:     capabilitySort(CapabilityVision),
+}
+
+// capabilitySort builds the sort for one feature column. The capability name is
+// interpolated here and nowhere else, from the fixed Capabilities list, so the
+// only strings that reach the SQL text are ones this package wrote.
+func capabilitySort(capability string) sortColumn {
+	return sortColumn{
+		ascending:    "sort_value ASC NULLS LAST",
+		descending:   "sort_value DESC NULLS LAST",
+		defaultOrder: orderDescending,
+		selectExpression: `(SELECT c.supported FROM llm_model_capabilities c
+		                     WHERE c.model_id = m.id AND c.capability = '` + capability + `')`,
+	}
 }
 
 // endpointSorts covers the "Every endpoint we track" table.
@@ -123,10 +163,20 @@ var endpointSorts = map[string]sortColumn{
 	},
 }
 
-// The defaults are the order the shelf shipped with: freshest verification
-// first, and the endpoints with the most keyless models at the top.
+// The working table defaults to reliability, not freshness.
+//
+// It shipped sorted by last verification, which churned: the top row changed
+// twice inside ninety seconds during a review, once to a model that had
+// answered three of its last five checks. That row was also the one the page's
+// only copyable snippet was built from, so the single thing a visitor was
+// invited to paste was whichever model happened to have been probed most
+// recently. Reliability moves much more slowly and is the property somebody
+// choosing an endpoint actually wants, so it decides both the order and the
+// snippet.
+//
+// The endpoint table keeps its original default.
 const (
-	defaultWorkingSort  = "verified"
+	defaultWorkingSort  = "reliability"
 	defaultEndpointSort = "keyless"
 )
 
@@ -145,6 +195,18 @@ type ShelfQuery struct {
 	Endpoint string
 	Search   string
 	Keyless  string
+	// Features narrows the working table to models where every named capability
+	// was proved by a real call. It is ANDed, like the API's, because an agent
+	// that needs tools and a schema needs one model with both, not two models.
+	//
+	// Only names in Capabilities survive parsing, so this can never carry a
+	// value the query layer has no column for.
+	Features []string
+	// UnknownFeatures are the names a visitor asked for that we publish no
+	// verdict for, kept rather than discarded so the page can say so. Dropping
+	// them silently is what the shelf did with the whole parameter, and a
+	// filter that quietly does nothing is worse than one that refuses.
+	UnknownFeatures []string
 	// Base is the path this state belongs to, so the same sort and filter
 	// machinery serves both shelves without either one linking into the other.
 	// It is set by the route from a constant and never read from the query
@@ -172,10 +234,13 @@ func (query ShelfQuery) basePath() string {
 // recognise. An unknown sort key falls back to the default rather than
 // erroring: a stale or mistyped link should still show the shelf.
 func ParseShelfQuery(values url.Values) ShelfQuery {
+	known, unknown := parseFeatures(values[featureParameter])
 	query := ShelfQuery{
-		Endpoint: clipFilter(values.Get(endpointParameter)),
-		Search:   clipFilter(values.Get(searchParameter)),
-		Keyless:  parseKeyless(values.Get(keylessParameter)),
+		Endpoint:        clipFilter(values.Get(endpointParameter)),
+		Search:          clipFilter(values.Get(searchParameter)),
+		Keyless:         parseKeyless(values.Get(keylessParameter)),
+		Features:        known,
+		UnknownFeatures: unknown,
 	}
 	query.WorkingSort, query.WorkingOrder = parseSort(
 		workingSorts,
@@ -207,6 +272,33 @@ func parseSort(columns map[string]sortColumn, fallback, key, order string) (stri
 	default:
 		return key, column.defaultOrder
 	}
+}
+
+// parseFeatures reads ?feature=tools&feature=vision and ?feature=tools,vision,
+// both spellings, the same way the API does -- a visitor copying the curl line
+// off the page into the address bar has to land on the same answer.
+//
+// image_out is refused here rather than carried: it belongs to models that draw,
+// the working table holds models that chat, and a filter that can only ever
+// empty the table is a broken control rather than a narrow one. The drawing
+// table below has no filter of its own to confuse it with.
+func parseFeatures(values []string) (known []string, unknown []string) {
+	for _, value := range values {
+		for _, name := range strings.Split(value, ",") {
+			name = strings.ToLower(strings.TrimSpace(name))
+			switch {
+			case name == "":
+				continue
+			case name == CapabilityImageOut, !KnownCapability(name):
+				if len(unknown) < len(Capabilities) && !slices.Contains(unknown, name) {
+					unknown = append(unknown, clipFilter(name))
+				}
+			case !slices.Contains(known, name):
+				known = append(known, name)
+			}
+		}
+	}
+	return known, unknown
 }
 
 func parseKeyless(value string) string {
@@ -253,7 +345,24 @@ func orderByFrom(columns map[string]sortColumn, key, order, fallback string) str
 // Filtered reports whether the visitor narrowed the shelf, so the page can say
 // what it is showing instead of quietly showing less than it claims.
 func (query ShelfQuery) Filtered() bool {
-	return query.Endpoint != "" || query.Search != "" || query.Keyless != ""
+	return query.Endpoint != "" || query.Search != "" || query.Keyless != "" ||
+		len(query.Features) > 0 || len(query.UnknownFeatures) > 0
+}
+
+// HasFeature reports whether one capability is in the active filter, so a
+// checkbox can render itself already ticked after a round trip.
+func (query ShelfQuery) HasFeature(name string) bool {
+	return slices.Contains(query.Features, name)
+}
+
+// workingSortValue is the extra inner-select column this sort needs, or the
+// empty string when the sort reads a column that is already there.
+func (query ShelfQuery) workingSortValue() string {
+	column, known := workingSorts[query.WorkingSort]
+	if !known {
+		return ""
+	}
+	return column.selectExpression
 }
 
 // values rebuilds the query string, omitting anything left at its default. A
@@ -269,6 +378,15 @@ func (query ShelfQuery) values() url.Values {
 	}
 	if query.Keyless != "" {
 		values.Set(keylessParameter, query.Keyless)
+	}
+	// One parameter per feature rather than one comma-separated value, so a
+	// checkbox group round-trips through the form unchanged and the address bar
+	// reads the way the API's own examples do.
+	for _, feature := range query.Features {
+		values.Add(featureParameter, feature)
+	}
+	for _, feature := range query.UnknownFeatures {
+		values.Add(featureParameter, feature)
 	}
 	if query.WorkingSort != defaultWorkingSort || query.WorkingOrder != workingSorts[defaultWorkingSort].defaultOrder {
 		values.Set(sortParameter, query.WorkingSort)

@@ -10,6 +10,51 @@ environment.
 | ------------------- | -------------------------------------------------------------- |
 | `POSTGRES_PASSWORD` | Password for the bundled `stillworks-db` service.               |
 | `SESSION_SECRET`    | Session and CSRF key material. Any long random string.          |
+| `PUBLIC_ORIGIN`     | `https://stillworks.supercapybara.com` — exactly scheme://host. |
+
+### `PUBLIC_ORIGIN`
+
+The address this deployment is reached under. It is what the canonical link and
+the social card's `og:image` are resolved against, and both are absolute by
+definition.
+
+**No trailing slash, no path, no query.** The value must be exactly
+`scheme://host[:port]`. Anything else is refused at startup and the process
+exits with the reason — deliberately, because the alternative failure is silent
+and total: the head is resolved before a byte of the page is written, so a
+malformed origin would make every HTML page answer `200` with an empty body
+while `/healthz` stayed `204` and `/api/llm/up` kept serving JSON. Healthy by
+every automated measure, blank for every human.
+
+Leaving it unset is safe and is not a degraded deployment in the way a missing
+database URL would be: the site serves normally, keeps its description and its
+tab icon, and simply publishes no canonical URL and no link-preview card. It
+does **not** fall back to the request's `Host` header — that is the client's own
+text, and resolving a canonical URL against it is how a request arriving under
+somebody else's name gets that name written into this site's canonical URL.
+
+So: set it, and get the social card working. Forget it, and lose only the card.
+Typo it, and the process refuses to start rather than serving nothing quietly.
+
+### `TRUST_PROXY_HEADERS`
+
+Optional, defaults to `false`, and **should be left unset on this stack.**
+
+It tells the framework to believe `X-Forwarded-For` and `X-Forwarded-Proto`,
+which is what `web.RemoteIP` and the CSRF origin check read. Turning it on is
+only safe where nothing but the proxy can open a connection to the port. On
+Dokploy the app sits on `dokploy-network`, which is shared with every other
+stack on the host, so that guarantee does not hold: any container on that
+network can dial this one directly and name its own address and scheme.
+
+The one thing it would buy — an `https` scheme in the document head behind the
+TLS-terminating proxy — `PUBLIC_ORIGIN` buys outright and without trusting
+anybody. Nothing in the application reads `web.RemoteIP` today.
+
+Note that the traffic counts and the per-visitor test-call limit are keyed on
+`audit.clientIP`, which reads `CF-Connecting-IP` and friends directly and is not
+governed by this setting either way. Making those read the framework's resolved
+address is a separate change with its own effect on the published numbers.
 
 ## Optional: the key-required shelf
 
