@@ -116,10 +116,14 @@ forbids.
 
 ## Optional: the key-required shelf
 
-`/llm/keyed/` publishes providers whose free tier needs an API key. We hold one
+`/?key=key` publishes providers whose free tier needs an API key. We hold one
 free-tier key per provider and probe with it. The keys live only in the
 environment — never in the database, never in the repository, never in a
 rendered page or an API response.
+
+(This used to be its own page at `/llm/keyed/`. Since 0.9.0 there is one shelf
+at `/`, with a key chip on every row and a filter in the URL; the old address
+answers `301` to `/?key=key`.)
 
 | Variable             | Provider   | Where the key comes from                                     |
 | -------------------- | ---------- | ------------------------------------------------------------ |
@@ -134,8 +138,8 @@ alternative — calling it anyway and recording the 401 — would publish an out
 against somebody else's service when the only thing actually missing is a
 variable on our side.
 
-An instance with none of them set serves the keyless shelf exactly as it did
-before the second shelf existed, and `/llm/keyed/` says nothing is verified.
+An instance with none of them set serves the keyless rows exactly as it did
+before the second shelf existed, and `/?key=key` says nothing is verified.
 
 The actual key values for this deployment are in the operator's key store, not
 here. To find which variable an endpoint reads, look at `key_env` on its row in

@@ -153,7 +153,7 @@ func TestBrowserCallOriginsAreBareOrigins(t *testing.T) {
 // A prompt is pasted into a single-quoted shell argument inside a JSON string.
 // Both layers have to survive a visitor who types a quote.
 func TestSnippetSurvivesAHostilePrompt(t *testing.T) {
-	snippet := trySnippet(TryResult{
+	snippet := TrySnippet(TryResult{
 		URL:    "https://api.llm7.io/v1/chat/completions",
 		Model:  "gpt-oss:20b",
 		Prompt: `it's "quoted" \ and multi` + "\n" + "line",
