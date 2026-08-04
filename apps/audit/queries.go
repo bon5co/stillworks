@@ -125,53 +125,116 @@ const latestModelsProbe = `
 `
 
 // Shelf returns every active endpoint with its most recent models probe and a
-// count of models proven keyless.
+// count of models proven keyless, in the shelf's default order.
 func Shelf(ctx context.Context, db *database.DB) ([]ShelfRow, error) {
+	return ShelfMatching(ctx, db, ParseShelfQuery(nil))
+}
+
+// ShelfMatching is Shelf narrowed and ordered by an already-validated query.
+// The ORDER BY arrives as a fragment chosen from a fixed table; every filter
+// arrives as a bound parameter. Nothing a visitor typed is ever part of the SQL
+// text.
+func ShelfMatching(ctx context.Context, db *database.DB, query ShelfQuery) ([]ShelfRow, error) {
+	conditions := []string{"e.active"}
+	arguments := []any{}
+	if query.Endpoint != "" {
+		conditions = append(conditions, "e.slug = ?")
+		arguments = append(arguments, query.Endpoint)
+	}
+	if query.Search != "" {
+		// An endpoint matches the model search when it offers a matching model.
+		// Matching the slug instead would answer a different question from the
+		// one the same box answers on the table above it.
+		conditions = append(conditions, `EXISTS (
+			SELECT 1 FROM llm_models searched
+			WHERE searched.endpoint_id = e.id AND searched.model_id ILIKE ? ESCAPE '\'
+		)`)
+		arguments = append(arguments, escapeLikePattern(query.Search))
+	}
+	switch query.Keyless {
+	case keylessOnly:
+		conditions = append(conditions, "COALESCE(w.working, 0) > 0")
+	case keylessExclude:
+		conditions = append(conditions, "COALESCE(w.working, 0) = 0")
+	}
+
 	var rows []ShelfRow
 	err := db.Bun().NewRaw(`
-		SELECT e.slug, e.provider, e.base_url, e.chat_path, e.docs_url, e.notes,
-		       COALESCE(p.outcome, 'never_probed') AS outcome,
-		       p.started_at AS checked_at,
-		       COALESCE(p.latency_ms, 0) AS latency_ms,
-		       COALESCE(p.models_listed, 0) AS models_listed,
-		       COALESCE(w.working, 0) AS working_models,
-		       COALESCE(w.key_only, 0) AS key_only_models
-		FROM llm_endpoints e
-		LEFT JOIN (`+latestModelsProbe+`) p ON p.endpoint_id = e.id
-		LEFT JOIN (
-			SELECT endpoint_id,
-			       count(*) FILTER (WHERE keyless IS TRUE)  AS working,
-			       count(*) FILTER (WHERE keyless IS FALSE) AS key_only
-			FROM llm_models GROUP BY endpoint_id
-		) w ON w.endpoint_id = e.id
-		WHERE e.active
-		ORDER BY COALESCE(w.working, 0) DESC, e.slug
-	`).Scan(ctx, &rows)
+		SELECT * FROM (
+			SELECT e.slug, e.provider, e.base_url, e.chat_path, e.docs_url, e.notes,
+			       COALESCE(p.outcome, 'never_probed') AS outcome,
+			       p.started_at AS checked_at,
+			       COALESCE(p.latency_ms, 0) AS latency_ms,
+			       COALESCE(p.models_listed, 0) AS models_listed,
+			       COALESCE(w.working, 0) AS working_models,
+			       COALESCE(w.key_only, 0) AS key_only_models
+			FROM llm_endpoints e
+			LEFT JOIN (`+latestModelsProbe+`) p ON p.endpoint_id = e.id
+			LEFT JOIN (
+				SELECT endpoint_id,
+				       count(*) FILTER (WHERE keyless IS TRUE)  AS working,
+				       count(*) FILTER (WHERE keyless IS FALSE) AS key_only
+				FROM llm_models GROUP BY endpoint_id
+			) w ON w.endpoint_id = e.id
+			WHERE `+strings.Join(conditions, " AND ")+`
+		) endpoints
+		ORDER BY `+query.endpointOrderBy()+`, slug
+	`, arguments...).Scan(ctx, &rows)
 	return rows, err
 }
 
 // WorkingModels lists every model verified keyless, freshest first. This is what
 // the runtime API serves: an agent asking "what can I call right now".
 func WorkingModels(ctx context.Context, db *database.DB, limit int) ([]WorkingModel, error) {
+	return WorkingModelsMatching(ctx, db, limit, ParseShelfQuery(nil))
+}
+
+// WorkingModelsMatching is WorkingModels narrowed and ordered by an
+// already-validated query. The keyless condition is not negotiable by a filter:
+// this list is what answered without a key, and a parameter that could widen it
+// would make the same table mean two different things.
+func WorkingModelsMatching(
+	ctx context.Context,
+	db *database.DB,
+	limit int,
+	query ShelfQuery,
+) ([]WorkingModel, error) {
+	conditions := []string{"m.keyless IS TRUE", "e.active"}
+	arguments := []any{}
+	if query.Endpoint != "" {
+		conditions = append(conditions, "e.slug = ?")
+		arguments = append(arguments, query.Endpoint)
+	}
+	if query.Search != "" {
+		conditions = append(conditions, `m.model_id ILIKE ? ESCAPE '\'`)
+		arguments = append(arguments, escapeLikePattern(query.Search))
+	}
+	arguments = append(arguments, limit)
+
+	// The select is wrapped so the ORDER BY can work on the computed columns:
+	// latency has to become NULLIF(latency_ms, 0) to sort unmeasured rows last,
+	// and an output alias cannot be used inside an expression otherwise.
 	var rows []WorkingModel
 	err := db.Bun().NewRaw(`
-		SELECT e.slug, e.base_url, e.chat_path, e.openai_compatible, m.model_id, m.tier, m.last_ok,
-		       COALESCE((
-		           SELECT latency_ms FROM llm_probes lp
-		           WHERE lp.endpoint_id = e.id AND lp.kind = 'chat'
-		             AND lp.model_used = m.model_id AND lp.outcome = 'ok'
-		           ORDER BY lp.started_at DESC LIMIT 1
-		       ), 0) AS latency_ms,
-		       COALESCE(r.attempts, 0)  AS attempts,
-		       COALESCE(r.successes, 0) AS successes
-		FROM llm_models m
-		JOIN llm_endpoints e ON e.id = m.endpoint_id
-		LEFT JOIN (`+recentChatReliability+`) r
-		       ON r.endpoint_id = m.endpoint_id AND r.model_used = m.model_id
-		WHERE m.keyless IS TRUE AND e.active
-		ORDER BY m.last_ok DESC NULLS LAST
+		SELECT * FROM (
+			SELECT e.slug, e.base_url, e.chat_path, e.openai_compatible, m.model_id, m.tier, m.last_ok,
+			       COALESCE((
+			           SELECT latency_ms FROM llm_probes lp
+			           WHERE lp.endpoint_id = e.id AND lp.kind = 'chat'
+			             AND lp.model_used = m.model_id AND lp.outcome = 'ok'
+			           ORDER BY lp.started_at DESC LIMIT 1
+			       ), 0) AS latency_ms,
+			       COALESCE(r.attempts, 0)  AS attempts,
+			       COALESCE(r.successes, 0) AS successes
+			FROM llm_models m
+			JOIN llm_endpoints e ON e.id = m.endpoint_id
+			LEFT JOIN (`+recentChatReliability+`) r
+			       ON r.endpoint_id = m.endpoint_id AND r.model_used = m.model_id
+			WHERE `+strings.Join(conditions, " AND ")+`
+		) working
+		ORDER BY `+query.workingOrderBy()+`, slug, model_id
 		LIMIT ?
-	`, limit).Scan(ctx, &rows)
+	`, arguments...).Scan(ctx, &rows)
 	return rows, err
 }
 
@@ -187,6 +250,44 @@ func EndpointBySlug(ctx context.Context, db *database.DB, slug string) (ShelfRow
 		}
 	}
 	return ShelfRow{}, false, nil
+}
+
+// EndpointSlugs is every active endpoint, for the filter control. It ignores
+// the current filter on purpose: a dropdown that only offers the value already
+// selected is a dead end.
+func EndpointSlugs(ctx context.Context, db *database.DB) ([]string, error) {
+	var slugs []string
+	err := db.Bun().NewRaw(`
+		SELECT slug FROM llm_endpoints WHERE active ORDER BY slug
+	`).Scan(ctx, &slugs)
+	return slugs, err
+}
+
+// TrackedModel returns the endpoint and the recorded keyless state for a model
+// we already track, and reports false for anything else. It is what stops the
+// test-call route from being a relay: a visitor can only ask us to call a pair
+// the prober already put in the database.
+func TrackedModel(
+	ctx context.Context,
+	db *database.DB,
+	slug string,
+	modelID string,
+) (Endpoint, *bool, bool, error) {
+	var found []struct {
+		Endpoint
+		Keyless *bool `bun:"keyless"`
+	}
+	err := db.Bun().NewRaw(`
+		SELECT e.*, m.keyless
+		FROM llm_endpoints e
+		JOIN llm_models m ON m.endpoint_id = e.id
+		WHERE e.active AND e.slug = ? AND m.model_id = ?
+		LIMIT 1
+	`, slug, modelID).Scan(ctx, &found)
+	if err != nil || len(found) == 0 {
+		return Endpoint{}, nil, false, err
+	}
+	return found[0].Endpoint, found[0].Keyless, true, nil
 }
 
 // ModelsFor lists what an endpoint advertises and what we have verified.
