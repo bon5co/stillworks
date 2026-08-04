@@ -21,6 +21,11 @@ type RuntimeSettings struct {
 	SessionSecret env.Secret
 	Debug         bool
 	Port          int
+	// InternalNetworks lists the addresses whose requests are our own work, as
+	// a comma-separated set of addresses or CIDR blocks. Empty means every
+	// request counts as a visitor, which is how the first day reported fifteen
+	// of them and meant none.
+	InternalNetworks string
 }
 
 func LoadDatabaseSettings() (DatabaseSettings, error) {
@@ -49,6 +54,7 @@ func LoadRuntimeSettings() (RuntimeSettings, error) {
 		env.Required("SESSION_SECRET", &settings.SessionSecret),
 		env.Optional("DEBUG", &settings.Debug, false),
 		env.Optional("PORT", &settings.Port, 8000),
+		env.Optional("INTERNAL_NETWORKS", &settings.InternalNetworks, ""),
 	)
 	if err := schema.Load(env.WithWorkingDirectory(root)); err != nil {
 		return RuntimeSettings{}, err

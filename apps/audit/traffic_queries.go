@@ -16,6 +16,10 @@ type TrafficTotals struct {
 	Sessions    int        `bun:"sessions" json:"sessions"`
 	APIClients  int        `bun:"api_clients" json:"api_clients"`
 	CrawlerHits int        `bun:"crawler_hits" json:"crawler_hits"`
+	// InternalHits is our own work -- deploy checks, browser tests, the daily
+	// curl against the live box. Reported, never counted: on the first day
+	// every one of the fifteen "visitors" was one of these.
+	InternalHits int `bun:"internal_hits" json:"internal_hits"`
 	FirstAt     *time.Time `bun:"first_at" json:"first_recorded_at"`
 	LastAt      *time.Time `bun:"last_at" json:"last_recorded_at"`
 }
@@ -58,9 +62,9 @@ type TrafficReport struct {
 // date, so counting distinct hashes counts daily uniques without a window
 // function and without keeping anything that survives the day.
 const sessionCounts = `
-	count(*) FILTER (WHERE kind = 'api' AND NOT is_crawler)                     AS api_calls,
-	count(*) FILTER (WHERE kind = 'page' AND NOT is_crawler)                    AS page_views,
-	count(DISTINCT visitor_hash) FILTER (WHERE kind = 'page' AND NOT is_crawler) AS sessions
+	count(*) FILTER (WHERE kind = 'api' AND NOT is_crawler AND NOT is_internal)                     AS api_calls,
+	count(*) FILTER (WHERE kind = 'page' AND NOT is_crawler AND NOT is_internal)                    AS page_views,
+	count(DISTINCT visitor_hash) FILTER (WHERE kind = 'page' AND NOT is_crawler AND NOT is_internal) AS sessions
 `
 
 // Traffic reads the record. One call, three queries, because the stats page
@@ -70,8 +74,9 @@ func Traffic(ctx context.Context, db *database.DB, days, limit int) (TrafficRepo
 
 	if err := db.Bun().NewRaw(`
 		SELECT `+sessionCounts+`,
-		       count(DISTINCT visitor_hash) FILTER (WHERE kind = 'api' AND NOT is_crawler) AS api_clients,
+		       count(DISTINCT visitor_hash) FILTER (WHERE kind = 'api' AND NOT is_crawler AND NOT is_internal) AS api_clients,
 		       count(*) FILTER (WHERE is_crawler) AS crawler_hits,
+		       count(*) FILTER (WHERE is_internal) AS internal_hits,
 		       min(occurred_at) AS first_at,
 		       max(occurred_at) AS last_at
 		FROM traffic_events
@@ -98,7 +103,7 @@ func Traffic(ctx context.Context, db *database.DB, days, limit int) (TrafficRepo
 		       count(*) AS hits,
 		       count(DISTINCT visitor_hash) AS visitors
 		FROM traffic_events
-		WHERE referrer_host <> '' AND NOT is_crawler
+		WHERE referrer_host <> '' AND NOT is_crawler AND NOT is_internal
 		GROUP BY 1
 		ORDER BY hits DESC, host
 		LIMIT ?
@@ -109,7 +114,7 @@ func Traffic(ctx context.Context, db *database.DB, days, limit int) (TrafficRepo
 	if err := db.Bun().NewRaw(`
 		SELECT kind, path, count(*) AS hits
 		FROM traffic_events
-		WHERE NOT is_crawler
+		WHERE NOT is_crawler AND NOT is_internal
 		GROUP BY 1, 2
 		ORDER BY hits DESC, path
 		LIMIT ?

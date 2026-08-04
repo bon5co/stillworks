@@ -359,6 +359,9 @@ templ StatsPage(report TrafficReport, dropped int64) {
 			if report.Totals.CrawlerHits > 0 {
 				{ fmt.Sprintf("%d crawler hit(s) recorded and excluded from every count above.", report.Totals.CrawlerHits) }
 			}
+			if report.Totals.InternalHits > 0 {
+				{ fmt.Sprintf("%d request(s) from our own deploy checks and tests, also excluded.", report.Totals.InternalHits) }
+			}
 		</p>
 		<h2>{ fmt.Sprintf("Last %d days", statsDays) }</h2>
 		if len(report.Days) == 0 {
@@ -427,6 +430,12 @@ templ StatsPage(report TrafficReport, dropped int64) {
 			</li>
 			<li>Requests to this page and to <code>/api/stats</code> are never counted. Reading the scoreboard must not move it.</li>
 			<li>Crawlers are recorded and excluded. Deleting them would hide a traffic source; counting them would turn a search engine into an audience.</li>
+			<li>
+				Our own requests are recorded and excluded too — deploy checks, browser tests, the
+				machine this is built on. These numbers decide whether the project continues, and
+				counting our own work as demand is the most comfortable way to get that decision
+				wrong.
+			</li>
 			<li>Counts are written from a bounded in-memory buffer, so a restart can lose up to two seconds of events.</li>
 			if dropped > 0 {
 				<li class="warn">{ fmt.Sprintf("%d event(s) were dropped because the write buffer was full. Under-counting is reported, never hidden.", dropped) }</li>
