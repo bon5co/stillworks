@@ -10,6 +10,10 @@
 	--warn: #8a5a00;
 	--bg: #fff;
 	--panel: rgba(15, 20, 30, .04);
+	/* A control boundary, distinct from --line. --line is a table rule at
+	   1.2:1 against its background, which is correct for a hairline and fails
+	   WCAG 1.4.11 for anything you are meant to press. */
+	--edge: #98a0ac;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -22,6 +26,7 @@
 		--warn: #fbbf24;
 		--bg: #0f1116;
 		--panel: rgba(255, 255, 255, .05);
+		--edge: #6b7484;
 	}
 }
 
@@ -31,12 +36,43 @@ body {
 	margin: 0;
 }
 
+/* godjango's shared stylesheet caps the layout's <main> at 42rem -- 672px, a
+   prose measure, correct for the login form it was written for. Every page here
+   is a wide data table inside that element, so .sw asked for 64rem and was
+   silently clamped: 1280, 1440 and 1920 all rendered at 632px of usable width,
+   and the eleven-column capability matrix -- which needs about 1192px -- was
+   never visible at any desktop size. The sticky last column then painted over
+   Tools and Schema, and the scroll shadow is anchored left, so at the scroll
+   position every visitor starts at there was no sign the row continued.
+
+   No framework hook is needed for this. Application stylesheets are linked
+   after godjango's in the document head, so a rule of equal specificity wins on
+   order alone; #main raises it further so the reason is legible rather than
+   depending on link order surviving a refactor. */
+main#main {
+	max-width: none;
+	margin: 0;
+	padding: 0;
+}
+
 .sw {
-	max-width: 64rem;
+	/* Wide enough for the whole matrix at 1280 with room to breathe:
+	   76rem = 1216px, less 2.5rem of padding, leaves 1176px of table. */
+	max-width: 76rem;
 	margin: 0 auto;
-	padding: 2.5rem 1.25rem 5rem;
+	padding: 2.5rem 1.25rem 4rem;
 	font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+
+/* Prose does not get the table's width. A 1176px line is unreadable, so every
+   paragraph that is a sentence rather than a grid keeps a reading measure. */
+.sw .measure,
+.sw .tag,
+.sw p {
+	max-width: 46rem;
+}
+
+.sw .small { font-size: .85rem; }
 
 .sw a { color: inherit; }
 .sw a:hover { text-decoration-thickness: 2px; }
@@ -94,13 +130,203 @@ body {
 	font-size: .86em;
 }
 
+/* Snippets wrap rather than scroll inside their own box. Both curl blocks on
+   the shelf overflowed at 1280, so the site's only working call could not be
+   read end to end without scrolling inside a code block -- and a value you
+   cannot see is one you cannot check before pasting. Wrapping is visual only:
+   the newlines the clipboard receives are the ones in the text. */
 .sw pre {
 	background: var(--panel);
 	padding: .9rem 1.1rem;
 	border-radius: .45rem;
-	overflow-x: auto;
 	border: 1px solid var(--line);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	margin: 0;
 }
+
+/* A snippet and the button that copies it. The button is written hidden and
+   revealed by the script, so with JavaScript off there is no control that does
+   nothing -- the text is still there, still selectable, and no longer clipped. */
+.sw .snippet {
+	position: relative;
+	max-width: 52rem;
+	margin: .75rem 0;
+}
+
+/* The button sits in a strip above the text rather than beside it. Reserving
+   width on the right instead made the first line run underneath the button at
+   any width where the label was wider than the reservation, and reserving
+   enough width forced the snippet to wrap where it otherwise would not. */
+.sw .snippet pre { padding-top: 2.5rem; }
+
+.sw .snippet .copy {
+	position: absolute;
+	top: .45rem;
+	right: .45rem;
+	font: inherit;
+	font-size: .75rem;
+	color: var(--muted);
+	background: var(--bg);
+	border: 1px solid var(--edge);
+	border-radius: .3rem;
+	padding: .25rem .55rem;
+	cursor: pointer;
+}
+
+.sw .snippet .copy:hover { color: var(--ink); }
+.sw .snippet .copy[data-copied] { color: var(--ok); border-color: var(--ok); }
+.sw .snippet .copy[hidden] { display: none; }
+
+/* The paste block: the first thing on the shelf, and the answer to the only
+   question most visitors arrive with. */
+.sw .start {
+	border: 1px solid var(--line);
+	border-radius: .6rem;
+	padding: 1.1rem 1.25rem 1.35rem;
+	margin: 1.5rem 0 2rem;
+	background: var(--panel);
+	max-width: 66rem;
+}
+
+.sw .start-h { margin: 0 0 .35rem; font-size: 1.05rem; }
+.sw .start-why { margin: 0 0 .9rem; font-size: .85rem; }
+
+.sw .start-facts {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: .3rem .9rem;
+	margin: 0 0 .35rem;
+	font-size: .9rem;
+}
+
+.sw .start-facts dt {
+	color: var(--muted);
+	font-size: .72rem;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+	padding-top: .15rem;
+}
+
+.sw .start-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Both blocks side by side where there is room, stacked where there is not.
+   Each is a complete answer on its own, so neither is hidden behind the other. */
+/* min(21rem, 100%), not a bare 21rem: a grid track minimum is a hard floor, so
+   below a 336px column the two snippets stopped shrinking and pushed the whole
+   page sideways instead -- 53px of it at 320px, which is a phone in landscape
+   split-view and every small Android. */
+.sw .start-pair {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(21rem, 100%), 1fr));
+	gap: 0 1rem;
+	align-items: start;
+}
+
+.sw .start-try {
+	margin-top: .6rem;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: .5rem .8rem;
+}
+
+/* The two disclosure panels above the table share a line at desktop width: a
+   collapsed <details> is one line of text and two of them stacked cost the
+   first data row a hundred and thirty pixels for nothing. */
+.sw .side-by-side {
+	display: inline-block;
+	vertical-align: top;
+	width: calc(50% - .5rem);
+	margin-right: .5rem;
+	box-sizing: border-box;
+}
+
+.sw h2.tight { margin-top: 1.75rem; margin-bottom: .35rem; }
+.sw p.tight { margin-top: 0; margin-bottom: .6rem; }
+
+/* The base URL under each endpoint slug, wrapped rather than allowed to set the
+   column width: without this one OVH row would add 340px to the table. */
+.sw .base-url {
+	max-width: 13rem;
+	font-size: .78rem;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+	line-height: 1.3;
+	margin-top: .15rem;
+}
+
+/* Collapsible prose: the methodology paragraph, the filter panel and the
+   glossary. <details> is HTML, not script, so all three still open with
+   JavaScript switched off -- which the glossary in particular has to, because
+   the alternative was a title attribute and a phone has no hover. */
+.sw details {
+	border: 1px solid var(--line);
+	border-radius: .45rem;
+	padding: .1rem .9rem;
+	margin: 1rem 0;
+	max-width: 54rem;
+}
+
+.sw details > summary {
+	cursor: pointer;
+	padding: .6rem 0;
+	font-size: .9rem;
+	color: var(--muted);
+}
+
+.sw details[open] > summary {
+	border-bottom: 1px solid var(--line);
+	margin-bottom: .6rem;
+}
+
+.sw .legend { max-width: 54rem; }
+.sw .legend-body { padding-bottom: .6rem; }
+.sw .legend h3 { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 1.1rem 0 .5rem; }
+.sw .legend dl { margin: 0; }
+.sw .legend dt { font-weight: 600; margin-top: .6rem; }
+.sw .legend dd { margin: .15rem 0 0; color: var(--muted); font-size: .9rem; max-width: 46rem; }
+
+.sw .site-foot {
+	margin-top: 3.5rem;
+	padding-top: 1rem;
+	border-top: 1px solid var(--line);
+	font-size: .85rem;
+	display: flex;
+	flex-wrap: wrap;
+	gap: .35rem 1.25rem;
+}
+
+.sw .feature-filter {
+	border: 1px solid var(--line);
+	border-radius: .3rem;
+	padding: .5rem .75rem .6rem;
+	margin: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: .35rem .9rem;
+	align-items: center;
+}
+
+.sw .feature-filter legend {
+	color: var(--muted);
+	font-size: .72rem;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+	padding: 0 .3rem;
+}
+
+.sw .filters label.check {
+	flex-direction: row;
+	align-items: center;
+	gap: .35rem;
+	text-transform: none;
+	letter-spacing: normal;
+	font-size: .85rem;
+	color: var(--ink);
+}
+
+.sw .filters label.check input { min-width: 0; }
 
 .ok { color: var(--ok); font-weight: 600; }
 .bad { color: var(--bad); font-weight: 600; }
@@ -118,7 +344,13 @@ body {
 	font-size: .9rem;
 }
 
-.shelf-nav a { margin-right: 1.1rem; }
+/* nowrap so a label breaks between links rather than through one. "free tier,
+   key required" rendered as two boxes reading "free tier, key" and "required". */
+.shelf-nav a {
+	margin-right: 1.1rem;
+	white-space: nowrap;
+	display: inline-block;
+}
 
 /* The traffic page leads with four numbers, because those four are what the
    project is judged on. */
@@ -166,9 +398,32 @@ body {
 	overflow-x: auto;
 	background:
 		linear-gradient(to right, var(--bg) 30%, rgba(0, 0, 0, 0)) left center / 2.5rem 100% no-repeat,
+		linear-gradient(to left, var(--bg) 30%, rgba(0, 0, 0, 0)) right center / 2.5rem 100% no-repeat,
+		radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, .28), rgba(0, 0, 0, 0)) left center / .9rem 100% no-repeat,
+		radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, .28), rgba(0, 0, 0, 0)) right center / .9rem 100% no-repeat;
+	background-attachment: local, local, scroll, scroll;
+}
+
+/* The right-hand pair is back, and works, on every table that does not pin its
+   last column. It was written once, never appeared, and was removed: the sticky
+   column paints an opaque background over exactly that strip in a later
+   stacking layer. That is still true, so the shelf's own table -- the only one
+   that pins -- turns it off again and keeps the pinned column as its signal.
+   Every other table on the site had no right-edge affordance at all, and at the
+   scroll position every visitor starts at, a table that runs off the edge looks
+   like a table that simply ends. */
+.sw .scroll:has(> table.pin-last) {
+	background:
+		linear-gradient(to right, var(--bg) 30%, rgba(0, 0, 0, 0)) left center / 2.5rem 100% no-repeat,
 		radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, .28), rgba(0, 0, 0, 0)) left center / .9rem 100% no-repeat;
 	background-attachment: local, scroll;
 }
+
+/* Said in words as well as in shadow, because a gradient is not a sentence.
+   .narrow-only appears below 760px, where a whole set of columns is folded
+   away; .scroll-note is unconditional, for the tables that are wider than the
+   page at every width this site is ever rendered at. */
+.sw .scroll-note { display: block; }
 
 /* max-content, not 100%: forced to the container width the cells squeeze until
    the last column is sliced in half, which is how the test-call button shipped
@@ -181,9 +436,14 @@ body {
 
 /* The call to action is pinned to the right edge, so scrolling the matrix never
    pushes the button out of reach. It needs its own background or the cells
-   underneath show through as it passes. */
-.sw .scroll > table th:last-child,
-.sw .scroll > table td:last-child {
+   underneath show through as it passes.
+
+   Only on a table that opts in. Written as :last-child on every scrolling
+   table, it pinned whatever happened to be last -- on the endpoint page that is
+   "Last listed", a column where every row reads the same timestamp, held in
+   place at 390px while the twelve columns worth reading scrolled behind it. */
+.sw .scroll > table.pin-last th:last-child,
+.sw .scroll > table.pin-last td:last-child {
 	position: sticky;
 	right: 0;
 	background: var(--bg);
@@ -191,14 +451,48 @@ body {
 }
 
 .sw .narrow-only { display: none; }
+/* Inside a .scroll-note the narrow half is an inline clause, not a block. */
+.sw .scroll-note .narrow-only { display: none; }
 
-/* Below this width the feature matrix costs more than it tells. Model,
-   endpoint, latency, track record and the button survive; the four capability
-   columns fold away with a line saying where they went, because silently
-   dropping data is the habit this site exists to complain about. */
+/* Below this width the feature matrix costs more than it tells on the shelf.
+   Model, endpoint, latency, track record and the button survive; the four
+   capability columns fold away with a line saying where they went, because
+   silently dropping data is the habit this site exists to complain about.
+
+   .detail is the same idea on an endpoint page, folding the opposite set: that
+   page is where a phone visitor is sent *for* the feature columns, so those are
+   the ones that stay. */
 @media (max-width: 760px) {
 	.sw .feature { display: none; }
+	.sw .detail { display: none; }
 	.sw .narrow-only { display: block; }
+	.sw .scroll-note .narrow-only { display: inline; }
+	.sw .base-url { max-width: 11rem; }
+	.sw .start { padding: .9rem 1rem 1.1rem; }
+	.sw .start-facts { grid-template-columns: 1fr; gap: 0 0; }
+	.sw .start-facts dd { margin-bottom: .5rem; }
+	.sw .shelf-nav a { margin-right: .9rem; }
+	/* Stacked, full width: half a phone screen is not a panel. */
+	.sw .side-by-side { display: block; width: auto; margin-right: 0; }
+	/* The Endpoint column is off-screen at this width behind the pinned Test
+	   button, so the base URL under it buys nothing and sets every row's height
+	   -- a column of nearly-blank 60px rows. It is on the endpoint page and in
+	   the paste block at the top of this one. */
+	.sw .base-url { display: none; }
+	/* Long model ids wrap instead of being sliced by the pinned column with no
+	   ellipsis and no cue that anything was cut. */
+	.sw tbody td code { overflow-wrap: anywhere; white-space: normal; }
+	/* A base URL and a curl line both wrap to several lines on a phone, and two
+	   blocks of them pushed everything else off the screen. Smaller and tighter
+	   rather than clipped or hidden: the whole value is still readable, and the
+	   copy button means most visitors never read it at all. */
+	.sw .snippet pre {
+		font-size: .72rem;
+		line-height: 1.35;
+		padding: 2.2rem .8rem .7rem;
+	}
+	.sw .snippet { margin: .5rem 0; }
+	.sw .snippet .copy { font-size: .7rem; padding: .2rem .45rem; }
 }
 
 /* A sorted column header is a link, so it has to look clickable without
@@ -236,6 +530,11 @@ body {
 	letter-spacing: .06em;
 }
 
+/* max-width before min-width: a select sizes itself to its longest option, and
+   the longest option here is a sentence. At 320px that one control was 351px
+   wide inside a 350px column and scrolled the whole page sideways -- on every
+   filtered URL, because the panel opens itself when a filter is active. A
+   control that pushes the page off the screen is worse than a cramped one. */
 .sw .filters input,
 .sw .filters select {
 	font: inherit;
@@ -247,8 +546,12 @@ body {
 	border: 1px solid var(--line);
 	border-radius: .3rem;
 	padding: .35rem .5rem;
-	min-width: 11rem;
+	min-width: min(11rem, 100%);
+	max-width: 100%;
 }
+
+.sw .filters label { max-width: 100%; min-width: 0; }
+.sw .filters { max-width: 100%; box-sizing: border-box; }
 
 .sw .filters button,
 .sw .try button {
@@ -256,7 +559,7 @@ body {
 	font-size: .85rem;
 	color: var(--ink);
 	background: var(--bg);
-	border: 1px solid var(--line);
+	border: 1px solid var(--edge);
 	border-radius: .3rem;
 	padding: .4rem .8rem;
 	cursor: pointer;
@@ -279,12 +582,89 @@ body {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.sw table.result { width: auto; }
+/* The result table is not wrapped in a scroller, so its widest cell decides
+   whether the whole page scrolls sideways. "2026-08-04 07:13:05 UTC (just now)"
+   is that cell, and .when forbids it from wrapping -- 35px of page-body
+   horizontal scroll at 390px on a page the Test button now sends people to. */
+.sw table.result { width: auto; max-width: 100%; }
 .sw table.result th { width: 9rem; }
+.sw table.result .when { white-space: normal; }
+.sw table.result td { overflow-wrap: anywhere; }
+
+/* A long URL inside prose or a list item wraps rather than pushing the page
+   wider. .sw pre got this when snippets stopped being clipped; a bare <code>
+   did not, and the traffic page ends on one. */
+.sw p code,
+.sw li code,
+.sw dd code { overflow-wrap: anywhere; }
 
 /* The button keeps its own line; the answer gets the width of the table. */
 .sw .try button { white-space: nowrap; }
 
 .sw tr.try-row td { border-bottom: 1px solid var(--line); }
 .sw tr.try-row:hover { background: none; }
+
+/* The result cell is stuck to the left edge of the scroller and bounded by the
+   viewport, so the answer to the button you just pressed is readable without
+   scrolling a table sideways to find it.
+
+   Both halves are needed. The table is min-width: max-content, so an unbounded
+   panel simply makes the table wider -- the explanation and the actions took it
+   to 982px inside a 350px scroller, and every line was cut mid-word. Bounding
+   the panel stops it driving the width; pinning the cell keeps it on screen when
+   the rest of the row is scrolled. */
+.sw tr.try-row td {
+	position: sticky;
+	left: 0;
+	background: var(--bg);
+}
+
+.sw .try-result {
+	max-width: min(60rem, calc(100vw - 3.5rem));
+	white-space: normal;
+}
+
+.sw .try-result > div { max-width: 100%; }
+
+.sw .try-note {
+	color: var(--muted);
+	font-weight: 400;
+	margin-top: .35rem;
+}
+
+/* Every result ends in something to do. */
+.sw .try-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: .5rem .9rem;
+	margin-top: .6rem;
+	font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size: .8rem;
+	font-weight: 400;
+	color: var(--muted);
+}
+
+.sw .try-actions button {
+	font: inherit;
+	color: var(--ink);
+	background: var(--bg);
+	border: 1px solid var(--edge);
+	border-radius: .3rem;
+	padding: .25rem .6rem;
+	cursor: pointer;
+}
+
+.sw .try-actions button:hover { background: var(--panel); }
+.sw .try-actions button[data-copied] { color: var(--ok); border-color: var(--ok); }
+
+/* The clipboard fallback's scratch field. Off-screen rather than display:none,
+   which cannot be selected, and in the stylesheet rather than inline, which the
+   default-src 'self' policy drops. */
+.offscreen-copy {
+	position: fixed;
+	top: 0;
+	left: -9999px;
+	opacity: 0;
+}
 

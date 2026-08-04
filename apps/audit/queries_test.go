@@ -3,6 +3,7 @@ package audit
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // Both cases are real and were verified against the live services on
@@ -137,5 +138,30 @@ func TestFirstOpenAICompatibleSkipsIncompatibleEntries(t *testing.T) {
 	drawing := []WorkingModel{{Slug: "pollinations", ModelID: "sana", OpenAICompatible: true}}
 	if _, ok := firstOpenAICompatible(drawing); ok {
 		t.Fatal("an image model must never be offered as OPENAI_MODEL")
+	}
+}
+
+// The home page prints one "last checked" beside a count of every verified
+// model. It read that off the head of the list, which was correct only while
+// the list was ordered freshest-first; the shelf now orders by reliability, so
+// the head is routinely hours older than the newest row.
+func TestLastVerifiedScansTheListRatherThanTrustingItsOrder(t *testing.T) {
+	newest := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	middle := time.Date(2026, 8, 4, 9, 0, 0, 0, time.UTC)
+	models := []WorkingModel{
+		// Most reliable, and not the most recently verified.
+		{ModelID: "steady", LastOK: &middle},
+		{ModelID: "fresh", LastOK: &newest},
+		{ModelID: "never", LastOK: nil},
+	}
+	got := lastVerified(models)
+	if got == nil || !got.Equal(newest) {
+		t.Fatalf("lastVerified = %v, want the newest %v", got, newest)
+	}
+	if lastVerified(nil) != nil {
+		t.Fatal("lastVerified of an empty list should be nil, not a zero time")
+	}
+	if lastVerified([]WorkingModel{{ModelID: "never"}}) != nil {
+		t.Fatal("a list where nothing has ever been verified has no last-verified time")
 	}
 }

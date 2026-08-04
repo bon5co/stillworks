@@ -265,3 +265,56 @@ func TestJoinURLKeepsBasePath(t *testing.T) {
 		}
 	}
 }
+
+// The raw probe log's Detail column read "{" for every provider that
+// pretty-prints its errors -- OVH's rate limiter among them -- because the
+// recorded reason was the body's first line. That is the single most useful
+// cell on an endpoint page reduced to a brace.
+func TestReasonFromDigsTheMessageOutOfAJSONErrorBody(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "pretty printed nested error",
+			payload: "{\n  \"error\": {\n    \"message\": \"Rate limit exceeded\",\n    \"code\": 429\n  }\n}",
+			want:    "Rate limit exceeded",
+		},
+		{
+			name:    "error as a bare string",
+			payload: `{"error":"Queue full for IP: 1 request already queued","status":429}`,
+			want:    "Queue full for IP: 1 request already queued",
+		},
+		{
+			name:    "top level message",
+			payload: "{\n  \"message\": \"missing_api_key\"\n}",
+			want:    "missing_api_key",
+		},
+		{
+			name:    "top level detail",
+			payload: "{\n  \"detail\": \"Not Found\"\n}",
+			want:    "Not Found",
+		},
+		{
+			// Not JSON at all: an edge serving an HTML refusal. The first line
+			// is still the best available answer and is still what we keep.
+			name:    "not json falls back to the first line",
+			payload: "<html>\n<head><title>403 Forbidden</title></head>",
+			want:    "<html>",
+		},
+		{
+			// JSON we cannot find a message in must not become an empty cell.
+			name:    "json with no message keeps the first line",
+			payload: "{\n  \"code\": 500\n}",
+			want:    "{",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := reasonFrom([]byte(testCase.payload)); got != testCase.want {
+				t.Fatalf("reasonFrom() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}

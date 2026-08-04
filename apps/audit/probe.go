@@ -426,7 +426,7 @@ func (p *Prober) probeListing(
 		return probe, nil
 	}
 	if probe.Outcome != OutcomeOK {
-		probe.Error = firstLine(payload)
+		probe.Error = reasonFrom(payload)
 		return probe, nil
 	}
 	models, parseErr := parseModels(payload)
@@ -728,7 +728,7 @@ func (p *Prober) ProbeChat(ctx context.Context, endpoint Endpoint, model string)
 		return p.scrub(endpoint, probe)
 	}
 	if probe.Outcome != OutcomeOK {
-		probe.Error = firstLine(payload)
+		probe.Error = reasonFrom(payload)
 		return p.scrub(endpoint, probe)
 	}
 	answer, parseErr := parseCompletion(payload)
@@ -810,6 +810,61 @@ func parseCompletion(payload []byte) (completion, error) {
 		}
 	}
 	return completion{}, nil
+}
+
+// reasonFrom is what a refusal gets recorded as. It digs the message out of a
+// JSON error body before falling back to the first line.
+//
+// The fallback alone produced a raw probe log whose Detail column read "{" for
+// every provider that pretty-prints its errors -- OVH's rate limiter among them
+// -- which is the single most useful cell on the page reduced to a brace. The
+// page's own JavaScript already did this for the browser-side test call; the
+// server side kept the first line and published the punctuation.
+//
+// The shapes are the ones providers on this shelf actually send: {"error":
+// {"message": ...}}, {"error": "..."}, and a bare {"message"|"detail": ...}.
+// Anything else falls through with its first line, which is the old behaviour
+// and is never worse than it was.
+func reasonFrom(payload []byte) string {
+	var body struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+		Detail  string          `json:"detail"`
+	}
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return firstLine(payload)
+	}
+	var nested struct {
+		Message string `json:"message"`
+		Detail  string `json:"detail"`
+	}
+	var plain string
+	if len(body.Error) > 0 {
+		if err := json.Unmarshal(body.Error, &nested); err == nil {
+			if message := firstNonBlank(nested.Message, nested.Detail); message != "" {
+				return firstLine([]byte(message))
+			}
+		}
+		// An error reported as a bare string rather than an object.
+		_ = json.Unmarshal(body.Error, &plain)
+	}
+	// Through firstLine, not a bare clip: a provider that returns a stack trace
+	// inside its message would otherwise put three hundred bytes of wrapped text
+	// into a table cell where one line used to go. The whole claim of this
+	// function is that it is never worse than what it replaced.
+	if message := firstNonBlank(plain, body.Message, body.Detail); message != "" {
+		return firstLine([]byte(message))
+	}
+	return firstLine(payload)
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // firstLine is the short excerpt every recorded reason is built from. It cuts on

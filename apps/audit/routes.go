@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -63,10 +64,10 @@ var appJS []byte
 //go:embed static/favicon.png
 var faviconPNG []byte
 
-// The social card is embedded now and served now, even though nothing links to
-// it yet: godjango's Layout owns the document head and has no way for an app to
-// declare og:image, so the <meta> tags wait on a framework change. Serving it
-// first means that change is a one-line addition rather than a deploy.
+// The social card, linked from every page's head since godjango grew
+// RenderOptions.Meta. Before that it was embedded and served and pointed at by
+// nothing, so a link to this site pasted into a chat window rendered as a blank
+// rectangle while the finished image sat on disk one URL away.
 //
 //go:embed static/og-card.png
 var socialCardPNG []byte
@@ -153,19 +154,36 @@ func (h *handlers) home(response http.ResponseWriter, request *http.Request) {
 		serverError(response, request, err)
 		return
 	}
-	// Both counts carry their own measurement time. Both lists are ordered
-	// freshest-verified first, so the head of each is the most recent thing we
-	// can point at. A number on this site without a time beside it is the thing
-	// the tagline promises never happens.
-	render(response, request, "stillworks — directories list, we check",
-		HomePage(working, keyed, lastVerified(working), lastVerified(keyed)))
+	// Both counts carry their own measurement time. A number on this site
+	// without a time beside it is the thing the tagline promises never happens.
+	render(response, request, page{
+		Title: "stillworks — directories list, we check",
+		Description: "Free LLM endpoints that need no key and no signup, re-probed by real calls " +
+			"and published with the time each one was measured. Nothing here says \"up\".",
+		Canonical: "/",
+	}, HomePage(working, keyed, lastVerified(working), lastVerified(keyed)))
 }
 
+// lastVerified is the most recent verification anywhere in the list, scanned
+// rather than read off the head.
+//
+// It used to return models[0].LastOK, which was true only for as long as the
+// list was ordered freshest-first. The shelf now orders by reliability, and the
+// head of that ordering is routinely not the newest row -- so the head's
+// timestamp would have gone on the home page under the words "last checked" and
+// been wrong by hours, which is precisely the failure this site exists to name
+// in other people's directories.
 func lastVerified(models []WorkingModel) *time.Time {
-	if len(models) == 0 {
-		return nil
+	var latest *time.Time
+	for _, model := range models {
+		if model.LastOK == nil {
+			continue
+		}
+		if latest == nil || model.LastOK.After(*latest) {
+			latest = model.LastOK
+		}
 	}
-	return models[0].LastOK
+	return latest
 }
 
 func (h *handlers) shelf(response http.ResponseWriter, request *http.Request) {
@@ -186,7 +204,11 @@ func (h *handlers) renderShelf(response http.ResponseWriter, request *http.Reque
 		serverError(response, request, err)
 		return
 	}
-	working, err := WorkingModelsMatching(request.Context(), h.db, apiLimit, query, nil, auth)
+	// The capability filter reaches the page's own table now. It arrives in the
+	// URL the page's own prose tells visitors to write, and for the shelf's
+	// first day the HTML parsed it, ignored it, and returned every row -- so
+	// ?feature=tools read as "all twenty-three of these do tool calling".
+	working, err := WorkingModelsMatching(request.Context(), h.db, apiLimit, query, query.Features, auth)
 	if err != nil {
 		serverError(response, request, err)
 		return
@@ -217,8 +239,11 @@ func (h *handlers) renderShelf(response http.ResponseWriter, request *http.Reque
 		serverError(response, request, err)
 		return
 	}
-	render(response, request, shelfTitleFor(auth),
-		ShelfPage(rows, working, drawing, query, slugs, auth, configured))
+	render(response, request, page{
+		Title:       shelfTitleFor(auth),
+		Description: shelfDescriptionFor(auth),
+		Canonical:   shelfPathFor(auth),
+	}, ShelfPage(rows, working, drawing, query, slugs, auth, configured))
 }
 
 // shelfIsConfigured reports whether we hold a credential for at least one
@@ -253,6 +278,15 @@ func shelfTitleFor(auth string) string {
 	return "Free keyless LLM endpoints — stillworks"
 }
 
+func shelfDescriptionFor(auth string) string {
+	if auth == AuthModeKey {
+		return "Providers whose free tier needs an API key, re-probed with our own free-tier key and " +
+			"published with the time each result was measured. Kept apart from the keyless shelf."
+	}
+	return "LLM endpoints that answer with no API key and no signup, with the base URL, the model id " +
+		"and a working curl. Every claim carries when it was measured and which features a real call proved."
+}
+
 // tryCall runs one call on a visitor's behalf and renders what happened. It is
 // a GET, and the whole request is in the URL, for the same reason the shelf's
 // sort is: it has to work with no JavaScript, and the page's own JavaScript
@@ -272,7 +306,7 @@ func (h *handlers) tryCall(response http.ResponseWriter, request *http.Request) 
 		serverError(response, request, err)
 		return
 	}
-	render(response, request, "Test call — stillworks", TryPage(result))
+	render(response, request, page{Title: "Test call — stillworks"}, TryPage(result))
 }
 
 func (h *handlers) apiTryCall(response http.ResponseWriter, request *http.Request) {
@@ -317,7 +351,7 @@ func (h *handlers) endpoint(response http.ResponseWriter, request *http.Request)
 	}
 	if !found {
 		response.WriteHeader(http.StatusNotFound)
-		render(response, request, "Not found — stillworks",
+		render(response, request, page{Title: "Not found — stillworks"},
 			NotFoundPage(fmt.Sprintf("No endpoint called %q is tracked here.", slug)))
 		return
 	}
@@ -331,11 +365,21 @@ func (h *handlers) endpoint(response http.ResponseWriter, request *http.Request)
 		serverError(response, request, err)
 		return
 	}
-	render(response, request, slug+" — stillworks", EndpointPage(row, models, probes))
+	render(response, request, page{
+		Title: slug + " — stillworks",
+		Description: fmt.Sprintf(
+			"%s: the base URL, a working call, every model we have checked and the raw probe log behind each verdict.",
+			row.Provider),
+		Canonical: "/llm/" + slug,
+	}, EndpointPage(row, models, probes))
 }
 
 func (h *handlers) mcp(response http.ResponseWriter, request *http.Request) {
-	render(response, request, "MCP servers — stillworks", ComingSoonPage())
+	render(response, request, page{
+		Title:       "MCP servers — stillworks",
+		Description: "The MCP shelf is not open yet. The LLM shelf ships first and has to earn its keep.",
+		Canonical:   "/mcp/",
+	}, ComingSoonPage())
 }
 
 // apiUp is the point of the whole project: an agent asks what it can call right
@@ -453,7 +497,12 @@ func (h *handlers) stats(response http.ResponseWriter, request *http.Request) {
 		serverError(response, request, err)
 		return
 	}
-	render(response, request, "Traffic — stillworks", StatsPage(report, h.recorder.Dropped()))
+	render(response, request, page{
+		Title: "Traffic — stillworks",
+		Description: "This site's own numbers, published to the standard it asks of everybody else: " +
+			"what was counted, what was excluded, and what was lost.",
+		Canonical: "/stats",
+	}, StatsPage(report, h.recorder.Dropped()))
 }
 
 func (h *handlers) apiStats(response http.ResponseWriter, request *http.Request) {
@@ -564,15 +613,28 @@ func writeEnv(response http.ResponseWriter, working []WorkingModel) {
 		fmt.Fprintf(response, "# stillworks: %s requires an API key. Verified with our own free-tier key %s;\n",
 			first.Slug, humanWhenPtr(first.LastOK))
 		fmt.Fprintln(response, "# that is not a statement about what your signup's free tier includes.")
-		fmt.Fprintf(response, "OPENAI_BASE_URL=%s\n", first.OpenAIBaseURL())
-		fmt.Fprintf(response, "OPENAI_API_KEY=your-%s-api-key\n", first.Slug)
-		fmt.Fprintf(response, "OPENAI_MODEL=%s\n", first.ModelID)
+		fmt.Fprintln(response, EnvLines(first))
 		return
 	}
 	fmt.Fprintf(response, "# stillworks: verified keyless %s\n", humanWhenPtr(first.LastOK))
-	fmt.Fprintf(response, "OPENAI_BASE_URL=%s\n", first.OpenAIBaseURL())
-	fmt.Fprintln(response, "OPENAI_API_KEY=not-needed")
-	fmt.Fprintf(response, "OPENAI_MODEL=%s\n", first.ModelID)
+	fmt.Fprintln(response, EnvLines(first))
+}
+
+// EnvLines is the three-line block an OpenAI client is configured with. It is
+// one function so the page and the API cannot disagree about what the base URL
+// is -- the page printed the raw base_url column instead for the shelf's first
+// day, which for OVH is missing the /v1 and answers 404 to everything.
+//
+// The key line is a placeholder on the keyed shelf and never a value: ours is
+// ours, and a block that looked complete would be pasted into a project and
+// fail on the first call with nothing on screen to explain why.
+func EnvLines(model WorkingModel) string {
+	key := "not-needed"
+	if model.RequiresKey() {
+		key = "your-" + model.Slug + "-api-key"
+	}
+	return fmt.Sprintf("OPENAI_BASE_URL=%s\nOPENAI_API_KEY=%s\nOPENAI_MODEL=%s",
+		model.OpenAIBaseURL(), key, model.ModelID)
 }
 
 // firstOpenAICompatible skips models that cannot answer a chat call at all.
@@ -635,21 +697,124 @@ func serveSocialCard(response http.ResponseWriter, request *http.Request) {
 	http.ServeContent(response, request, "og-card.png", time.Time{}, bytes.NewReader(socialCardPNG))
 }
 
-func render(response http.ResponseWriter, request *http.Request, title string, content templ.Component) {
-	_ = view.Render(response, request, view.RenderOptions{
-		Title:       title,
+// page is one rendered page's own head metadata. Title is required; the rest is
+// what a link preview and a search result are built from, and a page that
+// declares none of it gets no social tags at all rather than half a card.
+type page struct {
+	Title string
+	// Description is the sentence a search result and a link preview quote. It
+	// says what was measured, like everything else here: "verified by real
+	// calls" and not "the best free LLM list".
+	Description string
+	// Canonical is this page's own stable address, without the sort and filter
+	// parameters that produce a hundred spellings of the same shelf. Naming the
+	// request's own URL instead would ask a crawler to index every one of them.
+	Canonical string
+}
+
+// publicOrigin is the scheme and host this deployment is reached under, for
+// example https://stillworks.supercapybara.com. It is written once at startup
+// by SetPublicOrigin and read on every request; nothing writes it afterwards.
+//
+// Empty is a supported, safe state and not a fallback to the request's own
+// Host header. The Host header is the client's own text, so resolving a
+// canonical URL or an og:image against it lets a request arriving under any
+// other name that routes here write that name into this page's canonical URL --
+// which is the ordinary way to hand somebody your search ranking. With no origin
+// configured this site publishes no canonical and no social card at all, which
+// is exactly what it published before any of this existed.
+var publicOrigin = strings.TrimSpace(os.Getenv("PUBLIC_ORIGIN"))
+
+// SetPublicOrigin lets the server hand over the configured origin at startup,
+// so the environment is read through the project's own typed settings rather
+// than a second time from this package. Startup only: it is not safe to call
+// once requests are being served.
+func SetPublicOrigin(origin string) { publicOrigin = strings.TrimSpace(origin) }
+
+// ValidPublicOrigin reports whether a configured origin is one the view layer
+// will accept, so the server can refuse to start rather than discover it one
+// request at a time.
+//
+// This exists because the failure is silent and total. The view layer resolves
+// the whole document head before writing a byte and returns an error if it
+// cannot; a trailing slash on the origin is enough. With that error discarded --
+// which is what this file used to do -- every HTML page answers 200 with an
+// empty body while /healthz stays 204 and /api/llm/up keeps serving JSON. The
+// deployment looks healthy, the API looks healthy, and every human sees a blank
+// white page. A trailing slash is the single most likely thing to be typed into
+// a deployment's environment field.
+func ValidPublicOrigin(origin string) error {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return nil
+	}
+	parsed, err := url.Parse(origin)
+	switch {
+	case err != nil:
+		return fmt.Errorf("PUBLIC_ORIGIN %q is not a URL: %w", origin, err)
+	case parsed.Scheme != "http" && parsed.Scheme != "https":
+		return fmt.Errorf("PUBLIC_ORIGIN %q needs an http:// or https:// scheme", origin)
+	case parsed.Host == "":
+		return fmt.Errorf("PUBLIC_ORIGIN %q names no host", origin)
+	case parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "":
+		return fmt.Errorf(
+			"PUBLIC_ORIGIN %q must be exactly scheme://host[:port] — no path, no query, no trailing slash", origin)
+	}
+	return nil
+}
+
+func render(response http.ResponseWriter, request *http.Request, meta page, content templ.Component) {
+	options := view.RenderOptions{
+		Title:       meta.Title,
 		Content:     content,
 		Stylesheets: []string{stylesheetPath},
 		// The script only ever improves on a page that already works without
-		// it: sorting, filtering and the test call are all server routes first.
-		Scripts:     []string{scriptPath},
+		// it: sorting, filtering, the copy buttons and the test call are all
+		// usable with it switched off.
+		Scripts: []string{scriptPath},
+		Meta: view.Meta{
+			Description: meta.Description,
+			Origin:      publicOrigin,
+			// The icon href is relative and stays relative: a browser resolves
+			// it against the document, so it needs no origin and is safe on
+			// every page including the ones that declare nothing else.
+			Icon: view.Icon{
+				Href: faviconPath,
+				Type: "image/png",
+			},
+		},
 		CSRFToken:   web.CSRFToken(request),
 		PushURL:     request.URL.RequestURI(),
 		CachePolicy: view.NoStore,
-	})
+	}
+	// A canonical URL and a link preview are absolute, so both need an origin we
+	// are willing to stand behind. Without one they are simply not published.
+	//
+	// They are also only published by a page that named itself: the error page
+	// and the 404 pass no description and no canonical, and a shared 404 that
+	// previews as the finished product card is a small lie of exactly the kind
+	// this site exists to complain about.
+	if publicOrigin != "" && meta.Canonical != "" && meta.Description != "" {
+		options.Meta.Canonical = meta.Canonical
+		options.Meta.Social = view.Social{
+			Image: socialCardPath,
+			ImageAlt: "stillworks: a row of sample squares, most of them verified green, " +
+				"one refused, over the words \"directories list, we check\".",
+			SiteName: "stillworks",
+		}
+	}
+	if err := view.Render(response, request, options); err != nil {
+		// Never silently. The render fails before writing anything, so swallowing
+		// it serves a 200 with no body -- indistinguishable from a working page
+		// to every health check and invisible in the logs.
+		slog.Error("stillworks: rendering a page failed", "path", request.URL.Path, "error", err)
+		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		response.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(response, "stillworks: this page could not be rendered. The failure is in our logs.")
+	}
 }
 
 func serverError(response http.ResponseWriter, request *http.Request, err error) {
 	response.WriteHeader(http.StatusInternalServerError)
-	render(response, request, "Error — stillworks", NotFoundPage(err.Error()))
+	render(response, request, page{Title: "Error — stillworks"}, NotFoundPage(err.Error()))
 }

@@ -50,6 +50,20 @@ func main() {
 		exit(err)
 	}
 	auditApp.UseRecorder(recorder)
+	// The public origin decides what the canonical link and the social card URL
+	// resolve against. Read from the project's typed settings so there is one
+	// place the environment is described.
+	//
+	// Checked here, before the listener opens, because the alternative failure is
+	// silent and total: the view layer resolves the head before writing a byte,
+	// and a malformed origin -- a trailing slash is enough -- makes every HTML
+	// page answer 200 with an empty body while /healthz and the JSON API stay
+	// green. Better to not start at all than to serve a blank site that every
+	// health check calls healthy.
+	if err := audit.ValidPublicOrigin(settings.PublicOrigin); err != nil {
+		exit(err)
+	}
+	audit.SetPublicOrigin(settings.PublicOrigin)
 	configured, err := configuredproject.ConfigureWith(auditApp)
 	if err != nil {
 		exit(err)
@@ -89,6 +103,11 @@ func main() {
 			},
 		},
 		Middleware: []web.Middleware{
+			// First in the chain, because everything after it that asks "who is
+			// calling and over what scheme" reads the answer this decides. A
+			// request that reaches a later middleware without passing through
+			// here is reported as plaintext from the proxy's own address.
+			web.TrustedProxy(web.TrustedProxyConfig{TrustAnyPeer: settings.TrustProxyHeaders}),
 			web.RequestID(),
 			web.Recover(),
 			// connect-src is widened to exactly the endpoints on the shelf, so

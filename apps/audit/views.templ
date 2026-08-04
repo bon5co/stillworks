@@ -2,58 +2,144 @@ package audit
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 )
 
+// Three items, not five. The two that went are still reachable from the footer
+// on every page: the MCP shelf exists only to say it has nothing yet, and the
+// traffic page is written for whoever runs this site -- a visitor deciding
+// whether to trust the shelf and following "our traffic" is told the site has
+// had seventeen visitors, which is a credibility link that costs credibility.
+//
+// Five items wrapped to three lines at 390px, above a heading, above a nine-line
+// methodology paragraph, above a filter form: the whole first screen of a phone
+// held nothing a visitor could use. Three items and a paste block is the fix.
+// The table itself did not move much and was never meant to -- what changed is
+// what sits above it.
 templ header() {
-	<div class="shelf-nav muted">
+	<nav class="shelf-nav muted" aria-label="Shelves">
 		<a href="/">stillworks</a>
-		<a href="/llm/">keyless LLM endpoints</a>
+		<a href="/llm/">no key needed</a>
 		<a href="/llm/keyed/">free tier, key required</a>
-		<a href="/mcp/">MCP servers</a>
-		<a href="/stats">our traffic</a>
+	</nav>
+}
+
+// siteFooter carries what the nav no longer does, plus the runtime API, which
+// is the thing most likely to be wanted by whoever reads this far and was
+// previously mentioned only in passing on the home page.
+//
+// A labelled nav rather than a <footer>. The framework owns the document body
+// and puts every page inside <main>, and a <footer> nested in <main> is not a
+// contentinfo landmark -- so these three links, two of which are the only route
+// left to their pages, would have been in no landmark at all.
+templ siteFooter() {
+	<nav class="site-foot muted" aria-label="Elsewhere on this site">
+		<a href="/mcp/">MCP servers (not open yet)</a>
+		<a href="/stats">our own traffic</a>
+		<a href="/api/llm/up"><code>GET /api/llm/up</code></a>
+	</nav>
+}
+
+// copyable is a snippet with a button that puts it on the clipboard. The button
+// is written hidden and revealed by the page's script, so with JavaScript off
+// there is no button that does nothing -- just the text, selectable and wrapped
+// rather than clipped, which is how it has to work anyway.
+//
+// The identifier is passed in rather than generated because templ has no
+// counter, and two blocks sharing one id would copy the wrong one.
+templ copyable(identifier string, label string, text string) {
+	<div class="snippet">
+		<pre id={ identifier }>{ text }</pre>
+		<button type="button" class="copy" data-copy={ identifier } data-label={ label } hidden>
+			{ "Copy " + label }
+		</button>
 	</div>
 }
 
+// HomePage leads with the thing somebody came for: an endpoint they can paste.
+// It used to lead with three paragraphs about the state of the registries, and
+// the first callable value on the page was a curl against our own API -- true,
+// useful to an agent, and not what a person arriving from a link wants first.
 templ HomePage(working []WorkingModel, keyed []WorkingModel, checked *time.Time, keyedChecked *time.Time) {
 	<div class="sw">
 		@header()
 		<h1>Directories list. We check.</h1>
-		<p class="tag">Nothing here is trusted because someone published it. Everything is re-probed, and every claim carries the time it was measured.</p>
-		<p class="lede">
+		<p class="tag">Every claim here carries the time it was measured and a link to the call that measured it.</p>
+		if best, found := firstOpenAICompatible(working); found {
+			@startHere(best, AuthModeNone)
+		}
+		<h2>Free LLM endpoints — no key, no signup</h2>
+		<p class="measure">
+			{ countOf(len(working), "model") } verified answering with no API key at all{ sinceClause(checked) }.
+			<a href="/llm/">See the shelf</a>, or ask the API:
+		</p>
+		@copyable("home-api", "this", "curl https://stillworks.supercapybara.com/api/llm/up")
+		<h2>Free tier, key required</h2>
+		<p class="measure">
+			{ countOf(len(keyed), "model") } on providers whose free tier needs a key, answering
+			our own free-tier key{ sinceClause(keyedChecked) }. These carry the same record of what
+			happened and when — but a call that works on our key is a weaker claim than one that
+			works on no key, and the two are never mixed.
+			<a href="/llm/keyed/">See that shelf</a>, or opt in:
+		</p>
+		@copyable("home-api-keyed", "this", "curl 'https://stillworks.supercapybara.com/api/llm/up?auth=key'")
+		<p class="muted measure">
+			The plain <code>/api/llm/up</code> above returns keyless endpoints and nothing else. It
+			always will: callers wrote that URL down when it was the only shelf here.
+		</p>
+		<h2>Why re-probe at all</h2>
+		<p class="measure">
 			There are more than twenty thousand MCP servers listed across the registries and a
 			dozen competing lists of free LLM APIs. Almost none of them are re-tested. A list
 			that is never re-probed is a list of things that <em>used to</em> work.
 		</p>
-		<h2>Free LLM endpoints — no key, no signup</h2>
-		<p>
-			{ fmt.Sprintf("%d model(s)", len(working)) } verified answering with no API key at all
-			if checked != nil {
-				<span class="when">, last checked { humanWhen(*checked) }</span>
-			}
-			. <a href="/llm/">See the shelf</a>, or ask the API:
-		</p>
-		<pre>curl https://stillworks.supercapybara.com/api/llm/up</pre>
-		<h2>Free tier, key required</h2>
-		<p>
-			{ fmt.Sprintf("%d model(s)", len(keyed)) } on providers whose free tier needs a key, answering
-			our own free-tier key
-			if keyedChecked != nil {
-				<span class="when">, last confirmed { humanWhen(*keyedChecked) }</span>
-			}
-			. These carry the same record of what happened and when — but a call that works on our key
-			is a weaker claim than one that works on no key, and the two are never mixed.
-			<a href="/llm/keyed/">See that shelf</a>, or opt in:
-		</p>
-		<pre>curl 'https://stillworks.supercapybara.com/api/llm/up?auth=key'</pre>
-		<p class="muted">
-			The plain <code>/api/llm/up</code> above returns keyless endpoints and nothing else. It
-			always will: callers wrote that URL down when it was the only shelf here.
-		</p>
-		<h2>MCP servers</h2>
-		<p class="muted">Not open yet. The LLM shelf ships first and has to earn its keep before the second one starts.</p>
+		@siteFooter()
 	</div>
+}
+
+// startHere is the paste-ready block: the base URL a client can actually be
+// handed, the model id, and a call that runs as written. Every value on it is
+// the one the API computes, not a second derivation -- the page used to print
+// the raw base_url column, which for OVH is the host without its /v1 and
+// answers 404 to everything.
+//
+// It sits above the table on purpose. The shelf's first job is "get me a free
+// endpoint working in two minutes", and the answer to that was previously nine
+// hundred pixels below a methodology paragraph.
+templ startHere(model WorkingModel, auth string) {
+	<section class="start">
+		<h2 class="start-h">Paste this</h2>
+		<p class="start-why muted">
+			{ model.ModelID } on <a href={ templ.SafeURL("/llm/" + model.Slug) }>{ model.Slug }</a>,
+			{ answeredHow(auth) } — { reliabilitySentence(model.Successes, model.Attempts) },
+			most recently { humanWhenPtr(model.LastOK) }, from this server's address.
+		</p>
+		// Two blocks side by side where there is room. Both are the whole
+		// answer in themselves -- the .env names the base URL, the key and the
+		// model on three labelled lines -- so no separate list of the same
+		// three values sits above them repeating it.
+		<div class="start-pair">
+			@copyable("start-env", "as .env", EnvLines(model))
+			@copyable("start-curl", "as curl", snippet(model))
+		</div>
+		if auth == AuthModeKey {
+			<p class="muted small measure">
+				The key line is a placeholder. Ours is never rendered on this site, returned by its
+				API, or written into its database — it lives in the deployment's environment and goes
+				out on probes only. Get your own free one from { model.Slug }.
+			</p>
+		}
+		if auth != AuthModeKey {
+			<form class="try start-try" method="get" action="/llm/try" data-url={ directCallURL(model) } data-shape={ callShape(model) } data-model={ model.ModelID }>
+				<input type="hidden" name="endpoint" value={ model.Slug }/>
+				<input type="hidden" name="model" value={ model.ModelID }/>
+				<button type="submit">Test it from your address</button>
+				<span class="muted small">Keyless quotas are per-IP. Ours is not yours.</span>
+			</form>
+		}
+	</section>
 }
 
 // workingHeader and endpointHeader make a column heading a link that sorts by
@@ -67,6 +153,119 @@ templ workingHeader(query ShelfQuery, key string, label string) {
 	</th>
 }
 
+// workingFeatureHeader is a capability column heading: sortable like the
+// others, and marked so a narrow screen folds it away with its cells.
+templ workingFeatureHeader(query ShelfQuery, capability string) {
+	<th class="feature">
+		<a class="sort" href={ templ.SafeURL(query.WorkingSortLink(capability)) }>
+			{ capabilityLabel(capability) }{ query.WorkingSortMark(capability) }
+		</a>
+	</th>
+}
+
+// capabilityLegend is the answer to "what does Schema mean", which until now
+// existed only in the code and in a chat reply. It is a <details> and not a
+// tooltip: a title attribute does not exist on a phone, and the phone is where
+// the columns are folded away in the first place.
+//
+// Everything in it is a statement about what a call did, because that is the
+// only thing this site knows. No feature is described by what the provider
+// says about it -- that disagreement is its own row at the bottom.
+templ capabilityLegend() {
+	<details class="legend" id="what-the-columns-mean">
+		// Worded as one plain clause. An earlier version listed the four cell
+		// states inside the sentence, and the dash state made it read
+		// "…and — mean", which is a summary that needs its own summary.
+		<summary>
+			What <strong>Tools</strong>, <strong>Schema</strong>, <strong>JSON</strong> and
+			<strong>Vision</strong> mean, and what each cell state means
+		</summary>
+		<div class="legend-body">
+			<h3>The columns</h3>
+			<dl>
+				<dt>Tools</dt>
+				<dd>
+					We sent a <code>tools</code> array and the model came back with a well-formed
+					<code>tool_calls</code> entry an agent could dispatch. A 200 with no tool call in it
+					is not tool support, and is recorded as a no.
+				</dd>
+				<dt>Schema</dt>
+				<dd>
+					The strict structured-output mode:
+					<code>response_format: {"{"}"type": "json_schema", …{"}"}</code>. The reply parsed and
+					matched the schema we sent.
+				</dd>
+				<dt>JSON</dt>
+				<dd>
+					The weaker mode: <code>response_format: {"{"}"type": "json_object"{"}"}</code>. Valid
+					JSON, with no shape enforced. The two come apart in both directions — OVH's
+					<code>Mistral-7B-Instruct-v0.3</code> does the strict form and emits invalid JSON for
+					the weak one; llm7's <code>meta-Llama-3.1-8B-Instruct-Turbo</code> does
+					<code>json_object</code> while <code>json_schema</code> answers 405.
+				</dd>
+				<dt>Vision</dt>
+				<dd>
+					A real image went in inline and a correct answer about it came back. We ask about
+					something only a model that looked could know.
+				</dd>
+				<dt>Draws</dt>
+				<dd>
+					On the image table below: bytes came back with an image content type, and they
+					really are an image. Not a 200 taken on trust.
+				</dd>
+			</dl>
+			<h3>The cell states</h3>
+			<dl>
+				<dt class="ok">yes</dt>
+				<dd>A real call proved it. Hover or read the endpoint page for when.</dd>
+				<dt class="bad">no</dt>
+				<dd>A clean negative: the parameter was refused, or the answer did not conform.</dd>
+				<dt class="bad">no, claimed</dt>
+				<dd>
+					The negative contradicts the provider's own published claim — their listing
+					advertises the feature and our call could not get it out of the model. This is the
+					most interesting cell on the site and the reason the shelf exists.
+				</dd>
+				<dt class="muted">—</dt>
+				<dd>
+					No verdict. Either nobody has asked yet, or the check ran and got no usable answer
+					back — Pollinations sits here because its anonymous pool answered 402 to every
+					feature probe. A dash is a question, never a no.
+				</dd>
+			</dl>
+			<h3>The other columns</h3>
+			<dl>
+				<dt>Worked</dt>
+				<dd>
+					Successful chat probes over unsuccessful ones, across the last seven days, from this
+					server's address. A fraction rather than a percentage: ten of ten and one of one are
+					both a perfect record and are not the same claim.
+				</dd>
+				<dt>Verified</dt>
+				<dd>When this exact model last answered one of our calls.</dd>
+				<dt>Tier</dt>
+				<dd>
+					The provider's own name for the bucket this model sits in, copied from their listing
+					— <code>turbo</code> and <code>anonymous</code> are theirs, not ours. A dash means
+					their listing gives none.
+				</dd>
+				<dt>Last result</dt>
+				<dd>
+					On the endpoint table: <code>ok</code> answered, <code>needs_key</code> demanded a
+					credential, <code>blocked</code> was turned away by an edge or proxy without being
+					asked for one, <code>rate_limited</code> said not so fast,
+					<code>unreachable</code> never answered at all.
+				</dd>
+			</dl>
+			<p class="muted measure">
+				The same verdicts as JSON, filtered the way you need them — features are ANDed, and a
+				model whose features have never been probed is never returned by a filtered request:
+			</p>
+			<pre>curl 'https://stillworks.supercapybara.com/api/llm/up?feature=tools,json_schema'</pre>
+		</div>
+	</details>
+}
+
 templ endpointHeader(query ShelfQuery, key string, label string) {
 	<th>
 		<a class="sort" href={ templ.SafeURL(query.EndpointSortLink(key)) }>
@@ -78,41 +277,66 @@ templ endpointHeader(query ShelfQuery, key string, label string) {
 // shelfFilters is a plain GET form. The current sort travels in hidden fields
 // because a form submits only its own inputs, and losing the sort on every
 // filter change is the kind of small betrayal that makes a control feel broken.
+// It is wrapped in <details> so it costs one line of the first screen instead
+// of a hundred and eighty pixels, and <details> is HTML rather than script, so
+// it opens with JavaScript switched off. It starts open whenever a filter is
+// active: a control that hid the reason the table is short would be worse than
+// no control.
 templ shelfFilters(query ShelfQuery, slugs []string, auth string) {
-	<form class="filters" method="get" action={ templ.SafeURL(shelfPathFor(auth)) }>
-		<label>
-			Endpoint
-			<select name="endpoint">
-				<option value="" selected?={ query.Endpoint == "" }>every endpoint</option>
-				for _, slug := range slugs {
-					<option value={ slug } selected?={ query.Endpoint == slug }>{ slug }</option>
+	<details class="filter-wrap side-by-side" open?={ query.Filtered() }>
+		<summary>{ filterSummary(query) }</summary>
+		<form class="filters" method="get" action={ templ.SafeURL(shelfPathFor(auth)) }>
+			<fieldset class="feature-filter">
+				// The capability filter, which the API has honoured since it
+				// shipped and the page ignored. Checkboxes rather than a select
+				// because the features are ANDed and more than one is a normal
+				// thing to want.
+				<legend>Must have (proved by a real call)</legend>
+				for _, capability := range ChatCapabilities {
+					<label class="check">
+						<input type="checkbox" name="feature" value={ capability } checked?={ query.HasFeature(capability) }/>
+						{ capabilityLabel(capability) }
+					</label>
 				}
-			</select>
-		</label>
-		<label>
-			Model contains
-			<input type="search" name="q" value={ query.Search } placeholder="gpt, llama, mistral"/>
-		</label>
-		// This one only narrows the endpoint table below. The table above is
-		// verified by definition, so a filter that could widen it would make the
-		// same heading mean two different things.
-		<label>
-			Endpoints (below)
-			<select name="keyless">
-				<option value="" selected?={ query.Keyless == "" }>either way</option>
-				<option value="yes" selected?={ query.Keyless == "yes" }>{ "has a model that answered " + answeredHow(auth) }</option>
-				<option value="no" selected?={ query.Keyless == "no" }>{ "none verified " + answeredHow(auth) }</option>
-			</select>
-		</label>
-		<input type="hidden" name="sort" value={ query.WorkingSort }/>
-		<input type="hidden" name="order" value={ query.WorkingOrder }/>
-		<input type="hidden" name="endpoint_sort" value={ query.EndpointSort }/>
-		<input type="hidden" name="endpoint_order" value={ query.EndpointOrder }/>
-		<button type="submit">Apply</button>
-		if query.Filtered() {
-			<a class="clear" href="/llm/">Clear</a>
-		}
-	</form>
+			</fieldset>
+			<label>
+				Endpoint
+				<select name="endpoint">
+					<option value="" selected?={ query.Endpoint == "" }>every endpoint</option>
+					for _, slug := range slugs {
+						<option value={ slug } selected?={ query.Endpoint == slug }>{ slug }</option>
+					}
+				</select>
+			</label>
+			<label>
+				Model contains
+				<input type="search" name="q" value={ query.Search } placeholder="gpt, llama, mistral"/>
+			</label>
+			// This one only narrows the endpoint table at the bottom of the
+			// page. The table above is verified by definition, so a filter that
+			// could widen it would make the same heading mean two things. The
+			// label says which table it moves, which "Endpoints (below)" did
+			// not once the page had three tables on it.
+			<label>
+				In "every endpoint we track"
+				// Short options. A select is as wide as its longest option, and
+				// these were sentences -- 351px of them inside a 350px column.
+				<select name="keyless">
+					<option value="" selected?={ query.Keyless == "" }>all</option>
+					<option value="yes" selected?={ query.Keyless == "yes" }>{ "some verified " + answeredHow(auth) }</option>
+					<option value="no" selected?={ query.Keyless == "no" }>{ "none verified " + answeredHow(auth) }</option>
+				</select>
+			</label>
+			<input type="hidden" name="sort" value={ query.WorkingSort }/>
+			<input type="hidden" name="order" value={ query.WorkingOrder }/>
+			<input type="hidden" name="endpoint_sort" value={ query.EndpointSort }/>
+			<input type="hidden" name="endpoint_order" value={ query.EndpointOrder }/>
+			<button type="submit">Apply</button>
+			if query.Filtered() {
+				<a class="clear" href={ templ.SafeURL(shelfPathFor(auth)) }>Clear</a>
+			}
+		</form>
+	</details>
 }
 
 // ShelfPage renders either shelf. One component rather than two because the
@@ -137,34 +361,55 @@ templ ShelfPage(
 				These need an API key. They are here because we re-probe them and publish what
 				happened — not because they are free to call without signing up.
 			</p>
-			<p class="warn">
+		} else {
+			<h1>Free LLM endpoints</h1>
+			<p class="tag">Keyless. No key, no signup, nothing to sign up for.</p>
+		}
+		// The paste block comes before the methodology, before the filters and
+		// before the table. Whatever else a visitor wants, they want one
+		// endpoint that works, and it used to be nine hundred pixels down.
+		// Shown under a filter too, and describing itself as the best match for
+		// it: somebody who has just narrowed the shelf to models that do tool
+		// calling wants to paste one of those, not to go back and find the
+		// snippet again.
+		if best, found := firstOpenAICompatible(working); found {
+			@startHere(best, auth)
+		}
+		if auth == AuthModeKey {
+			<p class="warn measure">
 				Every result on this page was produced by a call carrying <strong>our own</strong>
 				free-tier key, from this server's address. It proves the endpoint answered our
 				account at the time shown. It is <strong>not</strong> a measurement of what your
 				signup's free tier includes, what quota you get, or whether the provider is still
 				handing out free accounts. We cannot measure any of that for you.
 			</p>
-			<p class="muted">
+			<p class="muted measure">
 				Looking for endpoints that need no key and no signup at all? That is the
 				<a href="/llm/">keyless shelf</a>, and it is the one this site is really about.
 			</p>
 		} else {
-			<h1>Free LLM endpoints</h1>
-			<p class="tag">Keyless only. No key, no signup, nothing to sign up for.</p>
-			<p class="muted">
-				Verified from this server's IP address, by calls carrying no Authorization header at
-				all. Keyless quotas are usually per-IP, so an endpoint that answers here can still
-				return 402 or 429 from yours — which is why the <strong>Worked</strong> column is
-				worth more than the last green tick, and why every row has a <strong>Test</strong>
-				button that calls it from <em>your</em> address.
-			</p>
-			<p class="muted">
-				Providers whose free tier wants a key are on a
-				<a href="/llm/keyed/">separate shelf</a>, kept separate on purpose.
-			</p>
+			// The nine-line methodology paragraph is still here, still says the
+			// same thing, and no longer stands between a visitor and the data.
+			<details class="method side-by-side">
+				<summary>How this was measured, and what it does not tell you</summary>
+				<p class="muted measure">
+					Verified from this server's IP address, by calls carrying no Authorization header at
+					all. Keyless quotas are usually per-IP, so an endpoint that answers here can still
+					return 402 or 429 from yours — which is why the <strong>Worked</strong> column is
+					worth more than the last green tick, and why every row has a <strong>Test</strong>
+					button that calls it from <em>your</em> address.
+				</p>
+				<p class="muted measure">
+					Providers whose free tier wants a key are on a
+					<a href="/llm/keyed/">separate shelf</a>, kept separate on purpose.
+				</p>
+			</details>
 		}
 		@shelfFilters(query, slugs, auth)
-		<h2>Working right now</h2>
+		if len(query.UnknownFeatures) > 0 {
+			<p class="warn measure">{ unknownFeatureWarning(query.UnknownFeatures) }</p>
+		}
+		<h2 class="tight">{ workingHeading(query) }</h2>
 		if len(working) == 0 {
 			if query.Filtered() {
 				<p class="muted">
@@ -186,14 +431,35 @@ templ ShelfPage(
 				</p>
 			}
 		} else {
+			// Inside the else, and derived from the sort rather than asserted.
+			// Outside it, this sentence described the ordering of rows that were
+			// not there -- printed directly above "this instance holds no API key
+			// for any provider on this shelf". And hardcoding "most reliable
+			// first" made it false on every view but the default, since every
+			// column heading is a sort link.
+			<p class="muted small measure tight">
+				{ orderingSentence(query) } Each row carries when it last answered, because none of
+				them is a promise about the next minute.
+			</p>
 			<div class="scroll">
-				<table>
+				<table class="pin-last">
 					<thead>
 						<tr>
 							@workingHeader(query, "model", "Model")
 							@workingHeader(query, "endpoint", "Endpoint")
-							<th class="feature">Tier</th>
-							<th class="feature">Tools</th><th class="feature">Schema</th><th class="feature">JSON</th><th class="feature">Vision</th>
+							// Tier is not here. It is the provider's own word
+							// for a bucket, it is a dash on two of the three
+							// keyless endpoints, and at a hundred pixels it was
+							// the column that pushed the matrix past what fits
+							// at 1280. It is still on every endpoint's own page,
+							// where there is room for it.
+							// Sortable, like every other column that shows a
+							// verdict. A visitor looking for tool calling can
+							// now put the models that have it at the top
+							// instead of reading twenty-three rows.
+							for _, capability := range ChatCapabilities {
+								@workingFeatureHeader(query, capability)
+							}
 							@workingHeader(query, "latency", "Latency")
 							@workingHeader(query, "reliability", "Worked")
 							@workingHeader(query, "verified", "Verified")
@@ -206,8 +472,26 @@ templ ShelfPage(
 						for _, model := range working {
 							<tr>
 								<td><code>{ model.ModelID }</code></td>
-								<td><a href={ templ.SafeURL("/llm/" + model.Slug) }>{ model.Slug }</a></td>
-								<td class="muted feature">{ orDash(model.Tier) }</td>
+								<td>
+									<a href={ templ.SafeURL("/llm/" + model.Slug) }>{ model.Slug }</a>
+									// The base URL, on every row, in the form a
+									// client can actually be handed. It was on
+									// no row at all: the only place it appeared
+									// was inside one rotating snippet, and the
+									// endpoint pages printed a value that 404s.
+									//
+									// Only where there is one to give. The API
+									// omits openai_base_url for an endpoint that
+									// does not speak the OpenAI shape, and a page
+									// that prints one anyway hands out a value
+									// that fails on first use -- which is the
+									// exact defect this row was added to fix.
+									if model.OpenAICompatible {
+										<div class="base-url"><code>{ model.OpenAIBaseURL() }</code></div>
+									} else {
+										<div class="base-url muted">not OpenAI-shaped — see the endpoint page</div>
+									}
+								</td>
 								for _, capability := range ChatCapabilities {
 									@capabilityCell(model.Capabilities, capability)
 								}
@@ -228,30 +512,19 @@ templ ShelfPage(
 					</tbody>
 				</table>
 			</div>
-			<p class="muted">
-				A feature column says what a real call proved, not what the provider's own
-				listing claims. A dash is a question nobody has asked yet, which is never the
-				same as a no. Ask the API for the ones you need:
+			<p class="muted small narrow-only">
+				Scroll the table sideways for the rest of each row. The four feature columns are
+				folded away at this width; every one of them is on the endpoint's own page.
 			</p>
-			<p class="muted narrow-only">
-				The feature columns are folded away at this width. Open an endpoint to see the
-				full matrix, or ask the API.
-			</p>
-			<pre>{ featureQueryExample(auth) }</pre>
-			<h2>Call one</h2>
-			if auth == AuthModeKey {
-				<p class="muted">
-					With your own key from that provider. Ours is never rendered on this site, returned
-					by its API, or written into its database — it lives in the deployment's environment
-					and goes out on probes only.
-				</p>
-			}
-			<pre>{ snippet(working[0]) }</pre>
+			@capabilityLegend()
+			<p class="muted measure">Same filter, as a call an agent can make — features are ANDed:</p>
+			@copyable("shelf-feature-api", "as curl", featureQueryExample(auth, query.Features))
 		}
 		<h2>Image generation</h2>
 		if len(drawing) == 0 {
 			<p class="muted">{ "No image endpoint on this shelf is currently verified " + answeredHow(auth) + "." }</p>
 		} else {
+			<div class="scroll">
 			<table>
 				<thead>
 					<tr><th>Model</th><th>Endpoint</th><th>Draws</th><th>Verified</th></tr>
@@ -267,6 +540,7 @@ templ ShelfPage(
 					}
 				</tbody>
 			</table>
+			</div>
 			<p class="muted">
 				Verified by asking for a picture and checking the bytes that came back are
 				really an image, not by trusting a 200.
@@ -314,7 +588,60 @@ templ ShelfPage(
 				</table>
 			</div>
 		}
+		@siteFooter()
 	</div>
+}
+
+// endpointCall is the callable half of an endpoint's page: the base URL an
+// OpenAI client can be handed, and a call that runs exactly as printed.
+//
+// The model it names is the first one on the page's own ordering that this
+// endpoint has actually verified, so the snippet is never built from a model
+// the endpoint refuses. When there is none it says so rather than printing a
+// call that cannot work.
+templ endpointCall(row ShelfRow, models []ModelRow) {
+	<section class="start">
+		<h2 class="start-h">Call it</h2>
+		<dl class="start-facts">
+			if row.OpenAICompatible {
+				<dt>Base URL</dt>
+				<dd><code>{ row.OpenAIBaseURL() }</code></dd>
+			} else {
+				// An Ollama-shaped endpoint has no OPENAI_BASE_URL to give.
+				// Printing one would be a paste that fails on first use.
+				<dt>Call URL</dt>
+				<dd><code>{ row.CallURL() }</code></dd>
+				<dt>Shape</dt>
+				<dd>Ollama, not OpenAI — no <code>OPENAI_BASE_URL</code> describes it.</dd>
+			}
+			<dt>API key</dt>
+			if row.RequiresKey() {
+				<dd>your own from { row.Provider }</dd>
+			} else {
+				<dd>none — send no <code>Authorization</code> header at all</dd>
+			}
+		</dl>
+		if verified, found := firstVerifiedModel(row, models); found {
+			@copyable("endpoint-curl", "as curl", endpointSnippet(row, verified))
+			if row.OpenAICompatible {
+				@copyable("endpoint-env", "as .env", endpointEnvLines(row, verified))
+			}
+			// LastOK, not LastChecked. A probe writes last_checked every time and
+			// last_ok only when the call succeeded, so a model that has been
+			// rate-limited for hours has a last_checked of minutes ago -- and
+			// printing that after the word "answered" invents an answer.
+			<p class="muted small measure">
+				Using <code>{ verified.ModelID }</code>, { reliabilitySentence(verified.Successes, verified.Attempts) },
+				last { answeredHowPast(row.RequiresKey()) } { humanWhenPtr(verified.LastOK) } from this
+				server's address. Every model this endpoint offers is in the table below.
+			</p>
+		} else {
+			<p class="warn measure">
+				{ "No model on this endpoint is currently verified " + answeredHow(row.AuthMode) + ", so there is no call here we would stand behind. " }
+				The raw probe log at the bottom of this page says what happened instead.
+			</p>
+		}
+	</section>
 }
 
 // tryForm submits to /llm/try with no JavaScript at all, which runs the call
@@ -342,12 +669,15 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 		@header()
 		<h1>{ row.Slug }</h1>
 		<p class="tag">
-			{ row.Provider } —
-			<code>{ row.BaseURL }</code>
+			{ row.Provider }
 			if row.DocsURL != "" {
 				— <a href={ templ.SafeURL(row.DocsURL) } rel="nofollow noopener">docs</a>
 			}
 		</p>
+		// The callable values, first, on a page that previously had no <pre>
+		// block and no button anywhere on it -- and printed the bare host as
+		// the base URL, which for this provider answers 404 to every call.
+		@endpointCall(row, models)
 		if row.RequiresKey() {
 			<p class="warn">
 				This provider requires an API key. Every row below was measured with stillworks' own
@@ -361,6 +691,14 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 			<p class="lede muted">{ row.Notes }</p>
 		}
 		<h2>Models</h2>
+		// This is the page a phone visitor is sent to when the shelf folds its
+		// feature columns away, so the feature columns are the ones that stay.
+		// Four others carry no weight on a 390px screen -- the tier the
+		// provider named, whether it chats, the week's fraction, and the time
+		// the listing last mentioned it -- and they fold instead. It was the
+		// other way round: twelve columns went into a 318px scroller, and the
+		// rule that pins the last one pinned Last listed, a column where every
+		// row reads the same timestamp.
 		<div class="scroll">
 			<table>
 				<thead>
@@ -371,9 +709,9 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 						} else {
 							<th>Keyless</th>
 						}
-						<th>Chat</th>
-						<th>Tools</th><th>Schema</th><th>JSON</th><th>Vision</th><th>Images</th>
-						<th>Worked</th><th>Last checked</th><th>Last listed</th>
+						<th class="detail">Chat</th>
+						<th>Tools</th><th>Schema</th><th>JSON</th><th>Vision</th><th>Draws</th>
+						<th class="detail">Worked</th><th>Last checked</th><th class="detail">Last listed</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -382,7 +720,7 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 							<td><code>{ model.ModelID }</code></td>
 							<td class="muted">{ orDash(model.Tier) }</td>
 							<td>{ verdictLabel(model.Verdict(row.RequiresKey()), row.RequiresKey()) }</td>
-							<td class="muted">
+							<td class="muted detail">
 								if model.ChatCapable {
 									yes
 								} else {
@@ -392,21 +730,34 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 							for _, capability := range Capabilities {
 								@capabilityCell(model.Capabilities, capability)
 							}
-							<td class="when">{ reliability(model.Successes, model.Attempts) }</td>
+							<td class="when detail">{ reliability(model.Successes, model.Attempts) }</td>
 							<td class="when">{ humanWhenPtr(model.LastChecked) }</td>
-							<td class="when">{ humanWhen(model.LastSeen) }</td>
+							<td class="when detail">{ humanWhen(model.LastSeen) }</td>
 						</tr>
 					}
 				</tbody>
 			</table>
 		</div>
-		<p class="muted">
+		// Unconditional, unlike the shelf's. This table is wider than the page at
+		// every width the site is rendered at -- 1264px against a 1216px column
+		// at 1280 and at 1440 -- so saying it only below 760px would repeat the
+		// asymmetry the review found: the site disclosed folding on a phone and
+		// said nothing on a desktop where the columns were equally invisible.
+		<p class="muted small scroll-note">
+			Scroll the table sideways for the rest of each row.
+			<span class="narrow-only">Chat, Worked and Last listed are folded away at this width.</span>
+		</p>
+		<p class="muted measure">
 			Feature columns are measurements. Where the provider's own listing claims a
 			feature we could not get out of it, the cell says so — that disagreement is the
 			reason this shelf exists.
 		</p>
+		@capabilityLegend()
 		<h2>Raw probe log</h2>
-		<p class="muted">Our working, so you can check it rather than trust it.</p>
+		<p class="muted measure">
+			Our working, so you can check it rather than trust it. Wider than the page at any width —
+			scroll it sideways for the Detail column, which quotes the provider's own refusal back.
+		</p>
 		// Wrapped like the models table above it. Without this the detail column
 		// -- which quotes the provider's own error back -- pushes the whole
 		// document wider than a phone screen, so every page on the site scrolls
@@ -432,6 +783,7 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 				</tbody>
 			</table>
 		</div>
+		@siteFooter()
 	</div>
 }
 
@@ -474,6 +826,7 @@ templ StatsPage(report TrafficReport, dropped int64) {
 		if len(report.Days) == 0 {
 			<p class="muted">Nothing recorded yet. That is a real answer, not a loading state.</p>
 		} else {
+			<div class="scroll">
 			<table>
 				<thead>
 					<tr><th>Day (UTC)</th><th>Visitors</th><th>Page views</th><th>API calls</th></tr>
@@ -489,11 +842,13 @@ templ StatsPage(report TrafficReport, dropped int64) {
 					}
 				</tbody>
 			</table>
+			</div>
 		}
 		<h2>Where visitors came from</h2>
 		if len(report.Referrers) == 0 {
 			<p class="muted">No referring host has sent anybody yet.</p>
 		} else {
+			<div class="scroll">
 			<table>
 				<thead>
 					<tr><th>Referring host</th><th>Hits</th><th>Visitors</th></tr>
@@ -508,11 +863,13 @@ templ StatsPage(report TrafficReport, dropped int64) {
 					}
 				</tbody>
 			</table>
+			</div>
 		}
 		<h2>What was asked for</h2>
 		if len(report.Paths) == 0 {
 			<p class="muted">Nothing yet.</p>
 		} else {
+			<div class="scroll">
 			<table>
 				<thead>
 					<tr><th>Path</th><th>Kind</th><th>Hits</th></tr>
@@ -527,6 +884,7 @@ templ StatsPage(report TrafficReport, dropped int64) {
 					}
 				</tbody>
 			</table>
+			</div>
 		}
 		<h2>How this is counted</h2>
 		<ul class="muted">
@@ -549,6 +907,7 @@ templ StatsPage(report TrafficReport, dropped int64) {
 			}
 		</ul>
 		<p class="muted">Same numbers as JSON: <code>curl https://stillworks.supercapybara.com/api/stats</code></p>
+		@siteFooter()
 	</div>
 }
 
@@ -561,7 +920,11 @@ templ StatsPage(report TrafficReport, dropped int64) {
 // away on the endpoint page.
 templ capabilityCell(records map[string]CapabilityRecord, capability string) {
 	if record, held := records[capability]; !held || record.Supported == nil {
-		<td class="muted feature" title="never verified">—</td>
+		// A dash covers two facts and the tooltip says which one this is.
+		// Rendering both as "never verified" was wrong for every row where the
+		// check ran and the provider rate-limited it: checked_at was set,
+		// supported was still null, and the page claimed nobody had asked.
+		<td class="muted feature" title={ dashReason(record, held) }>—</td>
 	} else if *record.Supported {
 		<td class="ok feature" title={ "verified " + humanWhenPtr(record.LastOK) }>yes</td>
 	} else if record.ClaimContradicted() {
@@ -613,9 +976,15 @@ templ TryPage(result TryResult) {
 			if result.Detail != "" {
 				<h2>What came back instead</h2>
 				<pre>{ result.Detail }</pre>
+				// Only when there is something to say. statusMeaning is empty for
+				// a status it has no plain-English reading of, and an empty
+				// paragraph is a stray gap rather than a sentence.
+				if meaning := statusMeaning(result.HTTPStatus); meaning != "" {
+					<p class="muted measure">{ meaning }</p>
+				}
 			}
 			<h2>The same call, from your machine</h2>
-			<pre>{ trySnippet(result) }</pre>
+			@copyable("try-curl", "as curl", trySnippet(result))
 		}
 		<h2>Ask it something else</h2>
 		<form class="filters" method="get" action="/llm/try">
@@ -627,11 +996,15 @@ templ TryPage(result TryResult) {
 			</label>
 			<button type="submit">Call again</button>
 		</form>
-		<p class="muted">
+		<p class="muted measure">
 			{ fmt.Sprintf("Prompts are capped at %d characters and answers at %d tokens.", tryPromptLimit, tryMaxTokens) }
 			This is a demonstration that the endpoint answers, not a free inference service.
 		</p>
-		<p><a href="/llm/">Back to the shelf</a></p>
+		<p>
+			<a href={ templ.SafeURL("/llm/" + result.Endpoint) }>{ "See " + result.Endpoint + "'s raw probe log" }</a>
+			— <a href="/llm/">back to the shelf</a>
+		</p>
+		@siteFooter()
 	</div>
 }
 
@@ -639,7 +1012,9 @@ templ NotFoundPage(what string) {
 	<div class="sw">
 		@header()
 		<h1>Not here</h1>
-		<p class="muted">{ what }</p>
+		<p class="muted measure">{ what }</p>
+		<p><a href="/llm/">Every endpoint we track</a></p>
+		@siteFooter()
 	</div>
 }
 
@@ -652,7 +1027,9 @@ templ ComingSoonPage() {
 			of them exposes without running it. That shelf will record what each one actually
 			does: whether it starts, which tools it registers, and which secrets it demands.
 		</p>
-		<p class="muted">Not open yet. The LLM shelf ships first and has to earn its keep.</p>
+		<p class="muted measure">Not open yet. The LLM shelf ships first and has to earn its keep.</p>
+		<p><a href="/llm/">The LLM shelf is here</a></p>
+		@siteFooter()
 	</div>
 }
 
@@ -698,15 +1075,270 @@ func answeredHow(auth string) string {
 }
 
 // featureQueryExample keeps the copyable curl line on each shelf pointed at
-// that shelf. Without the auth parameter the keyed page would print an example
-// that returns keyless results, which is a working command that answers the
-// wrong question.
-func featureQueryExample(auth string) string {
-	const base = "curl 'https://stillworks.supercapybara.com/api/llm/up?feature=tools,json_schema"
-	if auth == AuthModeKey {
-		return base + "&auth=key'"
+// that shelf and at whatever the visitor has actually selected. Without the
+// auth parameter the keyed page would print an example that returns keyless
+// results, which is a working command that answers the wrong question; without
+// the visitor's own features it would print a filter they did not choose, next
+// to a table filtered by one they did.
+func featureQueryExample(auth string, features []string) string {
+	if len(features) == 0 {
+		features = []string{CapabilityTools, CapabilityJSONSchema}
 	}
-	return base + "'"
+	query := "curl 'https://stillworks.supercapybara.com/api/llm/up?feature=" + strings.Join(features, ",")
+	if auth == AuthModeKey {
+		return query + "&auth=key'"
+	}
+	return query + "'"
+}
+
+// capabilityLabel is the column heading for a capability. The names in the
+// database are the API's, which are the OpenAI request fields they test; the
+// headings are short enough to sit above a column of three-letter verdicts.
+func capabilityLabel(capability string) string {
+	switch capability {
+	case CapabilityTools:
+		return "Tools"
+	case CapabilityJSONSchema:
+		return "Schema"
+	case CapabilityJSONObject:
+		return "JSON"
+	case CapabilityVision:
+		return "Vision"
+	case CapabilityImageOut:
+		return "Draws"
+	default:
+		return capability
+	}
+}
+
+// countOf pluralises. "17 model(s)" is a programmer writing to a compiler in
+// public, on the sentence that carries the site's headline number.
+func countOf(count int, noun string) string {
+	if count == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
+}
+
+// humanList joins names the way a sentence does, so a warning about an unknown
+// filter reads as English rather than as a slice printed by mistake.
+func humanList(values []string) string {
+	switch len(values) {
+	case 0:
+		return ""
+	case 1:
+		return values[0]
+	case 2:
+		return values[0] + " and " + values[1]
+	default:
+		return strings.Join(values[:len(values)-1], ", ") + " and " + values[len(values)-1]
+	}
+}
+
+// sinceClause is the ", last checked 3 min ago" tail, built as one string so
+// the sentence cannot end up with a space before its full stop. The home page
+// read "at all , last checked just now ." because the clause was a separate
+// element and HTML collapses the newlines around it into spaces.
+func sinceClause(at *time.Time) string {
+	if at == nil {
+		return ""
+	}
+	return ", last checked " + humanWhen(*at)
+}
+
+// reliabilitySentence says what a fraction means, for the places that have room
+// for a sentence. The column keeps the fraction.
+func reliabilitySentence(successes, attempts int) string {
+	if attempts == 0 {
+		return "not probed in the last week"
+	}
+	if successes == attempts {
+		return fmt.Sprintf("answered all %s we made in the last week", countOf(attempts, "check"))
+	}
+	return fmt.Sprintf("answered %d of the %s we made in the last week", successes, countOf(attempts, "check"))
+}
+
+// unknownFeatureWarning is built as one string rather than three template
+// expressions, because templ renders the newline between two expressions as a
+// space and the sentence would arrive with a double space in the middle of it.
+// image_out gets its own sentence rather than being folded into the
+// no-verdict-published one. We do publish an image_out verdict -- it is the
+// Draws column on every endpoint page and the API accepts it as a filter. It
+// is refused here only because this table holds models that chat, so filtering
+// it by a drawing capability could only ever empty it. Saying "no verdict is
+// published for image_out" and then describing that verdict in the next clause
+// is a sentence that argues with itself.
+func unknownFeatureWarning(unknown []string) string {
+	named := make([]string, 0, len(unknown))
+	drawing := false
+	for _, feature := range unknown {
+		if feature == CapabilityImageOut {
+			drawing = true
+			continue
+		}
+		named = append(named, feature)
+	}
+	var message string
+	if len(named) > 0 {
+		message = "No verdict is published for " + humanList(named) +
+			", so that part of the filter was not applied. The features this shelf measures are " +
+			humanList(ChatCapabilities) + "."
+	}
+	if drawing {
+		if message != "" {
+			message += " "
+		}
+		message += "This table holds models that chat, so it cannot be filtered by " + CapabilityImageOut +
+			" — no model both draws and chats. What we measured about drawing is the Draws column on " +
+			"each endpoint's page and the image table below."
+	}
+	return message
+}
+
+// orderingSentence says how the table below is actually ordered. Every column
+// heading is a sort link, so the sentence has to follow the sort rather than
+// state the default and be wrong on every other view.
+func orderingSentence(query ShelfQuery) string {
+	direction := func(descending, ascending string) string {
+		if query.WorkingOrder == orderDescending {
+			return descending
+		}
+		return ascending
+	}
+	switch query.WorkingSort {
+	case "reliability":
+		return direction("Most reliable first.", "Least reliable first.")
+	case "verified":
+		return direction("Most recently verified first.", "Least recently verified first.")
+	case "latency":
+		return direction("Slowest first.", "Fastest first.")
+	case "model":
+		return direction("By model name, Z to A.", "By model name, A to Z.")
+	case "endpoint":
+		return direction("Grouped by endpoint, Z to A.", "Grouped by endpoint, A to Z.")
+	case CapabilityTools, CapabilityJSONSchema, CapabilityJSONObject, CapabilityVision:
+		label := strings.ToLower(capabilityLabel(query.WorkingSort))
+		return direction(
+			"Models proved to do "+label+" first.",
+			"Models proved to do "+label+" last.")
+	default:
+		return "Ordered by " + query.WorkingSort + "."
+	}
+}
+
+// workingHeading names what is under it. "Working right now" sat above rows
+// reading "1/3, 5 h ago", which is not a claim any of those rows supports.
+func workingHeading(query ShelfQuery) string {
+	if len(query.Features) == 0 {
+		return "Verified answering"
+	}
+	return "Verified answering, and proved to do " + humanList(capabilityLabels(query.Features))
+}
+
+func capabilityLabels(capabilities []string) []string {
+	labels := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		labels = append(labels, strings.ToLower(capabilityLabel(capability)))
+	}
+	return labels
+}
+
+// filterSummary is the one line a collapsed filter panel shows. It says what is
+// currently applied, because a control that hides the reason a table is short
+// is worse than no control at all.
+func filterSummary(query ShelfQuery) string {
+	if !query.Filtered() {
+		return "Filter and search"
+	}
+	parts := make([]string, 0, 4)
+	if len(query.Features) > 0 {
+		parts = append(parts, "must have "+humanList(capabilityLabels(query.Features)))
+	}
+	if query.Endpoint != "" {
+		parts = append(parts, "on "+query.Endpoint)
+	}
+	if query.Search != "" {
+		parts = append(parts, "named like "+query.Search)
+	}
+	if query.Keyless != "" {
+		parts = append(parts, "endpoint table narrowed")
+	}
+	return "Filtered: " + humanList(parts)
+}
+
+// statusMeaning translates the status a keyless call came back with. A visitor
+// pressing Test is owed the difference between "this endpoint is gone" and
+// "this pool is busy and will answer in a minute", and the number alone does
+// not carry it.
+func statusMeaning(status int) string {
+	switch {
+	case status == http.StatusPaymentRequired:
+		return "402 on a keyless pool means the shared anonymous budget is spent for the moment, not that the " +
+			"endpoint wants your card. These pools refill; the same call often answers a minute later. Our own " +
+			"success fraction for this model is in the Worked column, measured from our address, not yours."
+	case status == http.StatusTooManyRequests:
+		return "429 is a rate limit. Some of these providers allow one request in flight per address at a time, " +
+			"so a second press while the first is still running earns this. Wait and call again."
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return "401 or 403 means a credential was demanded, or an edge turned the call away. If this endpoint is " +
+			"on the keyless shelf and keeps answering this, it has stopped being keyless and the shelf is wrong " +
+			"until the next probe corrects it."
+	case status == http.StatusNotFound:
+		return "404 means the path is not there. The base URL on this page is the one an OpenAI client should be " +
+			"given; a bare host without its version prefix answers exactly this."
+	case status >= 500:
+		return "A 5xx is the provider's own failure, not a limit you can wait out by making the request smaller."
+	case status == 0:
+		return "No HTTP status at all: nothing answered on the socket within the timeout."
+	default:
+		return ""
+	}
+}
+
+// answeredHowPast is "answered" or "answered our key", for a sentence about a
+// past call. Same rule as answeredHow: no page may say a call was keyless when
+// it carried a credential.
+func answeredHowPast(requiresKey bool) string {
+	if requiresKey {
+		return "answered our key"
+	}
+	return "answered"
+}
+
+// firstVerifiedModel is the model an endpoint page builds its snippet from: one
+// this endpoint has actually verified, so the printed call is never one the
+// endpoint refuses. ModelsFor already orders verified rows first.
+func firstVerifiedModel(row ShelfRow, models []ModelRow) (ModelRow, bool) {
+	for _, model := range models {
+		verdict := model.Verdict(row.RequiresKey())
+		if verdict != nil && *verdict && model.ChatCapable {
+			return model, true
+		}
+	}
+	return ModelRow{}, false
+}
+
+// endpointSnippet and endpointEnvLines build the same two blocks the shelf
+// builds, from an endpoint row plus one of its models. They go through the same
+// derivation the API publishes rather than re-deriving the base URL, which is
+// the mistake that put a 404-ing URL on every endpoint page.
+func endpointSnippet(row ShelfRow, model ModelRow) string {
+	return snippet(workingModelFrom(row, model))
+}
+
+func endpointEnvLines(row ShelfRow, model ModelRow) string {
+	return EnvLines(workingModelFrom(row, model))
+}
+
+func workingModelFrom(row ShelfRow, model ModelRow) WorkingModel {
+	return WorkingModel{
+		Slug:             row.Slug,
+		BaseURL:          row.BaseURL,
+		ChatPath:         row.ChatPath,
+		AuthMode:         row.AuthMode,
+		ModelID:          model.ModelID,
+		OpenAICompatible: row.OpenAICompatible,
+	}
 }
 
 // reliability is shown as a plain fraction rather than a percentage: 2 of 3 is
@@ -716,6 +1348,19 @@ func reliability(successes, attempts int) string {
 		return "—"
 	}
 	return fmt.Sprintf("%d/%d", successes, attempts)
+}
+
+// dashReason distinguishes the two things a dash can mean. It never becomes a
+// "no": a check that ran and got nothing usable back has still not established
+// that the feature is absent.
+func dashReason(record CapabilityRecord, held bool) string {
+	if !held || record.LastChecked == nil {
+		return "never checked"
+	}
+	if record.LastError != "" {
+		return "checked " + humanWhenPtr(record.LastChecked) + ", no usable answer: " + truncate(record.LastError, 140)
+	}
+	return "checked " + humanWhenPtr(record.LastChecked) + ", no usable answer"
 }
 
 func orDash(value string) string {
@@ -811,17 +1456,25 @@ func escapeForShellJSON(prompt string) string {
 // line with a placeholder the reader has to replace: a snippet that looked
 // complete would be pasted straight into a project and fail on the first call,
 // and there is no honest way to fill it in for them -- our key is ours.
+// The two questions it answers are independent and are asked separately. Which
+// body the endpoint speaks is one axis -- mlvoca is Ollama-flavoured, taking a
+// bare prompt at /api/generate, and the prober and the test-call route have both
+// branched on that since they were written, while this page did not, so an
+// endpoint page said "Shape: Ollama, not OpenAI" and printed an OpenAI call ten
+// lines below it. Whether the call needs a credential is the other. Nesting them
+// dropped the Authorization line from any endpoint that was both, which is a
+// snippet that cannot work and no test would have noticed until such an endpoint
+// was seeded.
 func snippet(model WorkingModel) string {
+	authorization := ""
 	if model.RequiresKey() {
-		return fmt.Sprintf(`curl %s%s \
-  -H 'Authorization: Bearer YOUR_%s_API_KEY' \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"%s","messages":[{"role":"user","content":"hello"}]}'`,
-			strings.TrimSuffix(model.BaseURL, "/"), model.ChatPath,
-			strings.ToUpper(strings.ReplaceAll(model.Slug, "-", "_")), model.ModelID)
+		authorization = fmt.Sprintf("  -H 'Authorization: Bearer YOUR_%s_API_KEY' \\\n",
+			strings.ToUpper(strings.ReplaceAll(model.Slug, "-", "_")))
 	}
-	return fmt.Sprintf(`curl %s%s \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"%s","messages":[{"role":"user","content":"hello"}]}'`,
-		strings.TrimSuffix(model.BaseURL, "/"), model.ChatPath, model.ModelID)
+	body := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"hello"}]}`, model.ModelID)
+	if !model.OpenAICompatible {
+		body = fmt.Sprintf(`{"model":"%s","prompt":"hello","stream":false}`, model.ModelID)
+	}
+	return fmt.Sprintf("curl %s \\\n%s  -H 'Content-Type: application/json' \\\n  -d '%s'",
+		joinURL(model.BaseURL, model.ChatPath), authorization, body)
 }

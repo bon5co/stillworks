@@ -23,13 +23,17 @@ type ShelfRow struct {
 	// numbers mean. Every payload carrying a row has to state it: "verified"
 	// against a keyless endpoint and "verified" against a keyed one are two
 	// different claims that would otherwise print identically.
-	AuthMode     string     `bun:"auth_mode" json:"auth_mode"`
-	DocsURL      string     `bun:"docs_url" json:"docs_url"`
-	Notes        string     `bun:"notes" json:"notes,omitempty"`
-	Outcome      string     `bun:"outcome" json:"last_outcome"`
-	CheckedAt    *time.Time `bun:"checked_at" json:"checked_at"`
-	LatencyMS    int        `bun:"latency_ms" json:"latency_ms"`
-	ModelsListed int        `bun:"models_listed" json:"models_listed"`
+	AuthMode string `bun:"auth_mode" json:"auth_mode"`
+	// OpenAICompatible decides which snippet the endpoint's page prints. An
+	// Ollama-shaped endpoint handed an OPENAI_BASE_URL line is a paste that
+	// fails on first use, which is the one thing a page like this must not ship.
+	OpenAICompatible bool       `bun:"openai_compatible" json:"openai_compatible"`
+	DocsURL          string     `bun:"docs_url" json:"docs_url"`
+	Notes            string     `bun:"notes" json:"notes,omitempty"`
+	Outcome          string     `bun:"outcome" json:"last_outcome"`
+	CheckedAt        *time.Time `bun:"checked_at" json:"checked_at"`
+	LatencyMS        int        `bun:"latency_ms" json:"latency_ms"`
+	ModelsListed     int        `bun:"models_listed" json:"models_listed"`
 	// WorkingModels counts models that answered the kind of call this endpoint
 	// gets, and KeyOnlyModels counts models that refused it. On a keyless
 	// endpoint that refusal is a key demand; on a keyed one it is our own key
@@ -99,6 +103,11 @@ type WorkingModel struct {
 	// claim; "up" is not.
 	Attempts  int `bun:"attempts" json:"recent_attempts"`
 	Successes int `bun:"successes" json:"recent_successes"`
+	// SortValue receives the extra column a capability sort adds to the select.
+	// It is never published: it exists so the ORDER BY has something to name,
+	// and the verdict it holds is already in Capabilities in a form that says
+	// which feature it belongs to.
+	SortValue *bool `bun:"sort_value" json:"-"`
 }
 
 // OpenAIBaseURL is the value to hand an OpenAI client as its base URL: the
@@ -108,14 +117,32 @@ type WorkingModel struct {
 // returns 200 and POST /chat/completions returns 404, so publishing the bare
 // host as OPENAI_BASE_URL would hand out a snippet that cannot work.
 func (m WorkingModel) OpenAIBaseURL() string {
+	return openAIBaseURL(m.BaseURL, m.ChatPath)
+}
+
+// OpenAIBaseURL is the same value for an endpoint's own page. It is the same
+// function and not a second derivation: the API publishes one base URL per
+// endpoint and the page has to print that one. The page printed e.BaseURL
+// instead for the shelf's first day, which for OVH is the host with no /v1 --
+// a value that looks right, is what the provider's docs call the endpoint, and
+// answers 404 to every call an OpenAI client makes with it.
+func (row ShelfRow) OpenAIBaseURL() string {
+	return openAIBaseURL(row.BaseURL, row.ChatPath)
+}
+
+func openAIBaseURL(baseURL, chatPath string) string {
 	const suffix = "/chat/completions"
-	base := strings.TrimSuffix(m.BaseURL, "/")
-	path := m.ChatPath
+	base := strings.TrimSuffix(baseURL, "/")
+	path := chatPath
 	if strings.HasSuffix(path, suffix) {
 		path = strings.TrimSuffix(path, suffix)
 	}
 	return base + path
 }
+
+// CallURL is the exact address a call goes to, for an endpoint that does not
+// speak the OpenAI shape and therefore has no base URL to hand a client.
+func (row ShelfRow) CallURL() string { return joinURL(row.BaseURL, row.ChatPath) }
 
 // RequiresKey reports whether calling this model means bringing a key.
 func (m WorkingModel) RequiresKey() bool { return m.AuthMode == AuthModeKey }
@@ -170,13 +197,19 @@ type ModelRow struct {
 	// on every row rather than one merged field, so a reader can see which
 	// question was actually asked of this model -- on a keyless endpoint
 	// answered_with_key is always null, and that null is informative.
-	AnsweredWithKey *bool                       `bun:"answered_with_key" json:"answered_with_key"`
-	ChatCapable     bool                        `bun:"chat_capable" json:"chat_capable"`
-	LastChecked     *time.Time                  `bun:"last_checked" json:"last_checked"`
-	LastSeen        time.Time                   `bun:"last_seen" json:"last_seen"`
-	Attempts        int                         `bun:"attempts" json:"recent_attempts"`
-	Successes       int                         `bun:"successes" json:"recent_successes"`
-	Capabilities    map[string]CapabilityRecord `bun:"-" json:"capabilities"`
+	AnsweredWithKey *bool      `bun:"answered_with_key" json:"answered_with_key"`
+	ChatCapable     bool       `bun:"chat_capable" json:"chat_capable"`
+	LastChecked     *time.Time `bun:"last_checked" json:"last_checked"`
+	// LastOK is when this model last actually answered, which is not
+	// last_checked: a probe writes last_checked every time and last_ok only on
+	// success, so a model whose last three calls were 429s has a last_checked of
+	// minutes ago and a last_ok of hours ago. Anything on a page that says
+	// "answered" has to read this one.
+	LastOK       *time.Time                  `bun:"last_ok" json:"last_ok"`
+	LastSeen     time.Time                   `bun:"last_seen" json:"last_seen"`
+	Attempts     int                         `bun:"attempts" json:"recent_attempts"`
+	Successes    int                         `bun:"successes" json:"recent_successes"`
+	Capabilities map[string]CapabilityRecord `bun:"-" json:"capabilities"`
 }
 
 // Verdict is the answer for whichever question this model's endpoint asks, so a
@@ -320,7 +353,8 @@ func ShelfMatching(
 	var rows []ShelfRow
 	err := db.Bun().NewRaw(`
 		SELECT * FROM (
-			SELECT e.slug, e.provider, e.base_url, e.chat_path, e.auth_mode, e.docs_url, e.notes,
+			SELECT e.slug, e.provider, e.base_url, e.chat_path, e.auth_mode,
+			       e.openai_compatible, e.docs_url, e.notes,
 			       COALESCE(p.outcome, 'never_probed') AS outcome,
 			       p.started_at AS checked_at,
 			       COALESCE(p.latency_ms, 0) AS latency_ms,
@@ -346,8 +380,16 @@ func ShelfMatching(
 	return rows, err
 }
 
-// WorkingModels lists every model verified to answer, freshest first. This is
-// what the runtime API serves: an agent asking "what can I call right now".
+// WorkingModels lists every model verified to answer, most reliable first --
+// the same order the shelf shows, so an agent taking models[0] and a person
+// reading the top row get the same recommendation. This is what the runtime API
+// serves: an agent asking "what can I call right now".
+//
+// The order was freshest-verified first until 2026-08-04. Nothing about the
+// payload's shape changed with it, and models[0] became a better answer: a row
+// that answered three of its last five checks used to reach the top of both the
+// list and the page's copyable snippet purely by having been probed most
+// recently.
 //
 // auth chooses the shelf and is the caller's explicit decision every time. It
 // has no default here on purpose: /api/llm/up predates the second shelf and its
@@ -409,6 +451,15 @@ func WorkingModelsMatching(
 	arguments = append(arguments, bun.In(featureList(features)), len(features))
 	arguments = append(arguments, limit)
 
+	// A capability sort needs its verdict as a column of the inner select,
+	// because the outer ORDER BY cannot reach a correlated subquery. The
+	// expression is a fixed string from the sort table; nothing a visitor typed
+	// reaches the SQL text here any more than it does in the ORDER BY itself.
+	sortValue := ""
+	if expression := query.workingSortValue(); expression != "" {
+		sortValue = ", " + expression + " AS sort_value"
+	}
+
 	// The select is wrapped so the ORDER BY can work on the computed columns:
 	// latency has to become NULLIF(latency_ms, 0) to sort unmeasured rows last,
 	// and an output alias cannot be used inside an expression otherwise.
@@ -416,7 +467,7 @@ func WorkingModelsMatching(
 	err := db.Bun().NewRaw(`
 		SELECT * FROM (
 			SELECT e.slug, e.base_url, e.chat_path, e.openai_compatible, e.auth_mode,
-			       m.id AS model_row_id, m.model_id, m.tier, m.chat_capable, m.last_ok,
+			       m.id AS model_row_id, m.model_id, m.tier, m.chat_capable, m.last_ok`+sortValue+`,
 			       COALESCE((
 			           SELECT latency_ms FROM llm_probes lp
 			           WHERE lp.endpoint_id = e.id AND lp.kind = 'chat'
@@ -580,7 +631,7 @@ func ModelsFor(ctx context.Context, db *database.DB, slug string, auth string) (
 	var rows []ModelRow
 	err := db.Bun().NewRaw(`
 		SELECT m.id AS model_row_id, m.model_id, m.tier, m.keyless, m.answered_with_key,
-		       m.chat_capable, m.last_checked, m.last_seen,
+		       m.chat_capable, m.last_checked, m.last_ok, m.last_seen,
 		       COALESCE(r.attempts, 0)  AS attempts,
 		       COALESCE(r.successes, 0) AS successes
 		FROM llm_models m
