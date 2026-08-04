@@ -39,7 +39,72 @@ templ HomePage(working []WorkingModel, checked *time.Time) {
 	</div>
 }
 
-templ ShelfPage(rows []ShelfRow, working []WorkingModel, drawing []WorkingModel) {
+// workingHeader and endpointHeader make a column heading a link that sorts by
+// it. A link rather than a button: the sorted table has an address, so it can be
+// bookmarked, shared, and read by something with no JavaScript at all.
+templ workingHeader(query ShelfQuery, key string, label string) {
+	<th>
+		<a class="sort" href={ templ.SafeURL(query.WorkingSortLink(key)) }>
+			{ label }{ query.WorkingSortMark(key) }
+		</a>
+	</th>
+}
+
+templ endpointHeader(query ShelfQuery, key string, label string) {
+	<th>
+		<a class="sort" href={ templ.SafeURL(query.EndpointSortLink(key)) }>
+			{ label }{ query.EndpointSortMark(key) }
+		</a>
+	</th>
+}
+
+// shelfFilters is a plain GET form. The current sort travels in hidden fields
+// because a form submits only its own inputs, and losing the sort on every
+// filter change is the kind of small betrayal that makes a control feel broken.
+templ shelfFilters(query ShelfQuery, slugs []string) {
+	<form class="filters" method="get" action="/llm/">
+		<label>
+			Endpoint
+			<select name="endpoint">
+				<option value="" selected?={ query.Endpoint == "" }>every endpoint</option>
+				for _, slug := range slugs {
+					<option value={ slug } selected?={ query.Endpoint == slug }>{ slug }</option>
+				}
+			</select>
+		</label>
+		<label>
+			Model contains
+			<input type="search" name="q" value={ query.Search } placeholder="gpt, llama, mistral"/>
+		</label>
+		// This one only narrows the endpoint table below. The table above is
+		// keyless by definition, so a filter that could widen it would make the
+		// same heading mean two different things.
+		<label>
+			Endpoints (below)
+			<select name="keyless">
+				<option value="" selected?={ query.Keyless == "" }>either way</option>
+				<option value="yes" selected?={ query.Keyless == "yes" }>has a keyless model</option>
+				<option value="no" selected?={ query.Keyless == "no" }>none verified keyless</option>
+			</select>
+		</label>
+		<input type="hidden" name="sort" value={ query.WorkingSort }/>
+		<input type="hidden" name="order" value={ query.WorkingOrder }/>
+		<input type="hidden" name="endpoint_sort" value={ query.EndpointSort }/>
+		<input type="hidden" name="endpoint_order" value={ query.EndpointOrder }/>
+		<button type="submit">Apply</button>
+		if query.Filtered() {
+			<a class="clear" href="/llm/">Clear</a>
+		}
+	</form>
+}
+
+templ ShelfPage(
+	rows []ShelfRow,
+	working []WorkingModel,
+	drawing []WorkingModel,
+	query ShelfQuery,
+	slugs []string,
+) {
 	<div class="sw">
 		@header()
 		<h1>Free LLM endpoints</h1>
@@ -47,19 +112,30 @@ templ ShelfPage(rows []ShelfRow, working []WorkingModel, drawing []WorkingModel)
 		<p class="muted">
 			Verified from this server's IP address. Keyless quotas are usually per-IP, so an
 			endpoint that answers here can still return 402 or 429 from yours — which is why the
-			<strong>Worked</strong> column is worth more than the last green tick.
+			<strong>Worked</strong> column is worth more than the last green tick, and why every
+			row has a <strong>Test</strong> button that calls it from <em>your</em> address.
 		</p>
+		@shelfFilters(query, slugs)
 		<h2>Working right now</h2>
 		if len(working) == 0 {
-			<p class="muted">Nothing is currently verified as keyless. That is a real answer, not a loading state.</p>
+			if query.Filtered() {
+				<p class="muted">No verified keyless model matches that filter. <a href="/llm/">Show every one.</a></p>
+			} else {
+				<p class="muted">Nothing is currently verified as keyless. That is a real answer, not a loading state.</p>
+			}
 		} else {
 			<div class="scroll">
 				<table>
 					<thead>
 						<tr>
-							<th>Model</th><th>Endpoint</th><th>Tier</th>
+							@workingHeader(query, "model", "Model")
+							@workingHeader(query, "endpoint", "Endpoint")
+							<th>Tier</th>
 							<th>Tools</th><th>Schema</th><th>JSON</th><th>Vision</th>
-							<th>Latency</th><th>Worked</th><th>Verified</th>
+							@workingHeader(query, "latency", "Latency")
+							@workingHeader(query, "reliability", "Worked")
+							@workingHeader(query, "verified", "Verified")
+							<th>Test</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -74,6 +150,9 @@ templ ShelfPage(rows []ShelfRow, working []WorkingModel, drawing []WorkingModel)
 								<td class="when">{ latency(model.LatencyMS) }</td>
 								<td class="when">{ reliability(model.Successes, model.Attempts) }</td>
 								<td class="when">{ humanWhenPtr(model.LastOK) }</td>
+								<td>
+									@tryForm(model)
+								</td>
 							</tr>
 						}
 					</tbody>
@@ -113,27 +192,60 @@ templ ShelfPage(rows []ShelfRow, working []WorkingModel, drawing []WorkingModel)
 			</p>
 		}
 		<h2>Every endpoint we track</h2>
-		<table>
-			<thead>
-				<tr><th>Endpoint</th><th>Last result</th><th>Models listed</th><th>Keyless</th><th>Key required</th><th>Checked</th></tr>
-			</thead>
-			<tbody>
-				for _, row := range rows {
-					<tr>
-						<td>
-							<a href={ templ.SafeURL("/llm/" + row.Slug) }>{ row.Slug }</a>
-							<div class="muted">{ row.Provider }</div>
-						</td>
-						<td><span class={ outcomeClass(row.Outcome) }>{ row.Outcome }</span></td>
-						<td>{ fmt.Sprint(row.ModelsListed) }</td>
-						<td>{ fmt.Sprint(row.WorkingModels) }</td>
-						<td>{ fmt.Sprint(row.KeyOnlyModels) }</td>
-						<td class="when">{ humanWhenPtr(row.CheckedAt) }</td>
-					</tr>
-				}
-			</tbody>
-		</table>
+		if len(rows) == 0 {
+			<p class="muted">No tracked endpoint matches that filter. <a href="/llm/">Show every one.</a></p>
+		} else {
+			<div class="scroll">
+				<table>
+					<thead>
+						<tr>
+							@endpointHeader(query, "endpoint", "Endpoint")
+							<th>Last result</th>
+							@endpointHeader(query, "listed", "Models listed")
+							@endpointHeader(query, "keyless", "Keyless")
+							<th>Key required</th>
+							@endpointHeader(query, "checked", "Checked")
+						</tr>
+					</thead>
+					<tbody>
+						for _, row := range rows {
+							<tr>
+								<td>
+									<a href={ templ.SafeURL("/llm/" + row.Slug) }>{ row.Slug }</a>
+									<div class="muted">{ row.Provider }</div>
+								</td>
+								<td><span class={ outcomeClass(row.Outcome) }>{ row.Outcome }</span></td>
+								<td>{ fmt.Sprint(row.ModelsListed) }</td>
+								<td>{ fmt.Sprint(row.WorkingModels) }</td>
+								<td>{ fmt.Sprint(row.KeyOnlyModels) }</td>
+								<td class="when">{ humanWhenPtr(row.CheckedAt) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
 	</div>
+}
+
+// tryForm submits to /llm/try with no JavaScript at all, which runs the call
+// from this server. The page's script upgrades it in place: it makes the same
+// call from the visitor's own browser, which is the only version that answers
+// the question a per-IP quota actually raises. The data attributes are what the
+// script needs to build that request; without the script they are inert.
+templ tryForm(model WorkingModel) {
+	<form
+		class="try"
+		method="get"
+		action="/llm/try"
+		data-url={ directCallURL(model) }
+		data-shape={ callShape(model) }
+		data-model={ model.ModelID }
+	>
+		<input type="hidden" name="endpoint" value={ model.Slug }/>
+		<input type="hidden" name="model" value={ model.ModelID }/>
+		<button type="submit">Test call</button>
+	</form>
 }
 
 templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
@@ -335,6 +447,70 @@ templ capabilityCell(records map[string]CapabilityRecord, capability string) {
 	}
 }
 
+// TryPage is what a visitor sees with JavaScript switched off, or when their
+// browser could not reach the provider directly. Its first job is to be honest
+// about whose address made the call, because a result presented without that is
+// a different claim from the one it looks like.
+templ TryPage(result TryResult) {
+	<div class="sw">
+		@header()
+		<h1>Test call</h1>
+		<p class="tag">
+			<code>{ result.Model }</code> on
+			<a href={ templ.SafeURL("/llm/" + result.Endpoint) }>{ result.Endpoint }</a>
+		</p>
+		if !result.Made() {
+			<p class="lede warn">No call was made.</p>
+			<p class="muted">{ result.Refused }</p>
+		} else {
+			<p class="lede bad">
+				This call was made from { result.From } — not from yours.
+			</p>
+			<p class="muted">
+				Keyless quotas are commonly per-IP, so this tells you the endpoint answered
+				<em>us</em>. Your own address can get 402 or 429 for the same request. Run the
+				snippet below to find out, or open this page with JavaScript enabled and the
+				call is made by your browser instead.
+			</p>
+			<table class="result">
+				<tbody>
+					<tr><th>Outcome</th><td><span class={ outcomeClass(result.Outcome) }>{ result.Outcome }</span></td></tr>
+					<tr><th>HTTP</th><td>{ statusLabel(result.HTTPStatus) }</td></tr>
+					<tr><th>Latency</th><td class="when">{ latency(result.LatencyMS) }</td></tr>
+					<tr><th>Called at</th><td class="when">{ result.CalledAt.Format("2006-01-02 15:04:05") } UTC ({ humanWhen(result.CalledAt) })</td></tr>
+					<tr><th>Called from</th><td>{ result.From }</td></tr>
+					<tr><th>Prompt</th><td><code>{ result.Prompt }</code></td></tr>
+				</tbody>
+			</table>
+			if result.Answer != "" {
+				<h2>What it said</h2>
+				<pre>{ result.Answer }</pre>
+			}
+			if result.Detail != "" {
+				<h2>What came back instead</h2>
+				<pre>{ result.Detail }</pre>
+			}
+			<h2>The same call, from your machine</h2>
+			<pre>{ trySnippet(result) }</pre>
+		}
+		<h2>Ask it something else</h2>
+		<form class="filters" method="get" action="/llm/try">
+			<input type="hidden" name="endpoint" value={ result.Endpoint }/>
+			<input type="hidden" name="model" value={ result.Model }/>
+			<label>
+				Prompt
+				<input type="text" name="prompt" value={ result.Prompt } maxlength={ fmt.Sprint(tryPromptLimit) }/>
+			</label>
+			<button type="submit">Call again</button>
+		</form>
+		<p class="muted">
+			{ fmt.Sprintf("Prompts are capped at %d characters and answers at %d tokens.", tryPromptLimit, tryMaxTokens) }
+			This is a demonstration that the endpoint answers, not a free inference service.
+		</p>
+		<p><a href="/llm/">Back to the shelf</a></p>
+	</div>
+}
+
 templ NotFoundPage(what string) {
 	<div class="sw">
 		@header()
@@ -441,6 +617,37 @@ func humanWhen(at time.Time) string {
 	default:
 		return fmt.Sprintf("%d days ago", int(elapsed.Hours()/24))
 	}
+}
+
+// directCallURL and callShape are the two things the page's script needs to
+// make the call itself: where to send it, and which body the provider speaks.
+// They are computed here rather than in JavaScript so there is one
+// implementation of "how do you call this endpoint", not two that can disagree.
+func directCallURL(model WorkingModel) string {
+	return joinURL(model.BaseURL, model.ChatPath)
+}
+
+func callShape(model WorkingModel) string {
+	if model.OpenAICompatible {
+		return "openai"
+	}
+	return "ollama"
+}
+
+// trySnippet reproduces exactly the request that was just made, so a visitor can
+// run it from their own address and compare. The prompt is the one they sent.
+func trySnippet(result TryResult) string {
+	return fmt.Sprintf(`curl %s \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"%s","messages":[{"role":"user","content":"%s"}],"max_tokens":%d}'`,
+		result.URL, result.Model, escapeForShellJSON(result.Prompt), tryMaxTokens)
+}
+
+// escapeForShellJSON keeps a pasted prompt from breaking out of either the JSON
+// string or the surrounding single-quoted shell argument.
+func escapeForShellJSON(prompt string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "'", `'"'"'`, "\n", " ")
+	return replacer.Replace(prompt)
 }
 
 func snippet(model WorkingModel) string {

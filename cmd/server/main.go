@@ -90,7 +90,15 @@ func main() {
 		Middleware: []web.Middleware{
 			web.RequestID(),
 			web.Recover(),
-			web.SecurityHeaders(web.SecurityHeadersConfig{HTTPS: !settings.Debug}),
+			// connect-src is widened to exactly the endpoints on the shelf, so
+			// the test-call button can make its call from the visitor's own
+			// browser. That is the only version of the result worth much:
+			// keyless quotas are per-IP, and a call from this server answers a
+			// question nobody asked. Nothing else in the policy moves.
+			web.SecurityHeaders(web.SecurityHeadersConfig{
+				HTTPS:          !settings.Debug,
+				ConnectSources: audit.BrowserCallOrigins(),
+			}),
 			web.BodyLimit(1 << 20),
 			sessions.Middleware,
 			csrf.Middleware,
