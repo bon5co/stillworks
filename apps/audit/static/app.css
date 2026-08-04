@@ -120,6 +120,37 @@ body {
 
 .shelf-nav a { margin-right: 1.1rem; }
 
+/* The traffic page leads with four numbers, because those four are what the
+   project is judged on. */
+.sw .stats {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 1.5rem 2.5rem;
+	margin: 1.5rem 0 1rem;
+}
+
+.sw .stat {
+	display: flex;
+	flex-direction: column;
+}
+
+.sw .stat-n {
+	font-size: 2.1rem;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: -.03em;
+	line-height: 1.1;
+}
+
+.sw .stat-l {
+	color: var(--muted);
+	font-size: .72rem;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+}
+
+.sw ul { max-width: 46rem; padding-left: 1.1rem; }
+.sw li { margin-bottom: .45rem; }
+
 /* The detail tables are wide by nature; let them scroll rather than squeeze. */
 .sw .scroll {
 	overflow-x: auto;

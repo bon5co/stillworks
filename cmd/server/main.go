@@ -39,7 +39,17 @@ func main() {
 		exit(err)
 	}
 	defer db.Close()
-	configured, err := configuredproject.Configure()
+	// Background work -- probing other people's endpoints, writing our own
+	// traffic -- outlives any single request and stops when the process does.
+	backgroundCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
+	auditApp := audit.New()
+	recorder, err := audit.StartRecorder(backgroundCtx, db, slog.Default())
+	if err != nil {
+		exit(err)
+	}
+	auditApp.UseRecorder(recorder)
+	configured, err := configuredproject.ConfigureWith(auditApp)
 	if err != nil {
 		exit(err)
 	}
@@ -116,9 +126,7 @@ func main() {
 	}
 	// The prober runs inside this process rather than as a host cron entry, so
 	// the deployment stays one self-contained thing.
-	proberCtx, stopProber := context.WithCancel(context.Background())
-	defer stopProber()
-	audit.StartProber(proberCtx, db, probeInterval(), slog.Default())
+	audit.StartProber(backgroundCtx, db, probeInterval(), slog.Default())
 	fmt.Fprintf(os.Stdout, "Starting development server at http://%s/\n", address)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -130,8 +138,14 @@ func main() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	if err := server.Serve(ctx, listener); err != nil {
-		exit(err)
+	served := server.Serve(ctx, listener)
+	// Stop the background work and wait for the traffic writer, in that order:
+	// the requests this process just served are owed a write, and the flush
+	// happens on another goroutine that a bare return would outrun.
+	stopBackground()
+	recorder.Close(5 * time.Second)
+	if served != nil {
+		exit(served)
 	}
 }
 
