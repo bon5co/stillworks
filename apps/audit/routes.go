@@ -725,6 +725,17 @@ type page struct {
 // is exactly what it published before any of this existed.
 var publicOrigin = strings.TrimSpace(os.Getenv("PUBLIC_ORIGIN"))
 
+// analyticsScript is the same-origin loader that starts Plausible, or empty on
+// a deployment that runs no analytics -- which is every deployment until
+// PLAUSIBLE_HOST is set, including local development and the test suite.
+// Startup only, and for the same reason publicOrigin is: it is written once
+// before the listener opens and read on every request afterwards.
+var analyticsScript string
+
+// SetAnalyticsScript hands the view layer the analytics loader's URL. Empty
+// means the head links no analytics at all, which is the default.
+func SetAnalyticsScript(path string) { analyticsScript = strings.TrimSpace(path) }
+
 // SetPublicOrigin lets the server hand over the configured origin at startup,
 // so the environment is read through the project's own typed settings rather
 // than a second time from this package. Startup only: it is not safe to call
@@ -764,6 +775,14 @@ func ValidPublicOrigin(origin string) error {
 }
 
 func render(response http.ResponseWriter, request *http.Request, meta page, content templ.Component) {
+	// The site's own script first, analytics after it: nothing on the page
+	// waits on either, and the order says which one the visitor is here for.
+	// Both are same-origin, which is what default-src 'self' permits and the
+	// reason the analytics script is vendored rather than linked.
+	scripts := []string{scriptPath}
+	if analyticsScript != "" {
+		scripts = append(scripts, analyticsScript)
+	}
 	options := view.RenderOptions{
 		Title:       meta.Title,
 		Content:     content,
@@ -771,7 +790,7 @@ func render(response http.ResponseWriter, request *http.Request, meta page, cont
 		// The script only ever improves on a page that already works without
 		// it: sorting, filtering, the copy buttons and the test call are all
 		// usable with it switched off.
-		Scripts: []string{scriptPath},
+		Scripts: scripts,
 		Meta: view.Meta{
 			Description: meta.Description,
 			Origin:      publicOrigin,

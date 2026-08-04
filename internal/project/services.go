@@ -54,6 +54,17 @@ type RuntimeSettings struct {
 	// site publishes neither rather than resolving them against the Host header,
 	// which is the client's own text.
 	PublicOrigin string
+	// PlausibleHost is the Plausible instance this deployment reports to, for
+	// example https://plausible.supercapybara.com. Same shape as PublicOrigin
+	// and refused at startup on the same terms.
+	//
+	// Empty means no analytics: the pages link no analytics script, nothing is
+	// forwarded anywhere, and the site's own traffic recorder carries on alone.
+	// That is the default and it is what local development and the test suite
+	// run. Set, it additionally requires PublicOrigin -- Plausible files events
+	// by domain name, and one carrying none is answered 202 and then discarded
+	// without a word.
+	PlausibleHost string
 }
 
 func LoadDatabaseSettings() (DatabaseSettings, error) {
@@ -85,6 +96,7 @@ func LoadRuntimeSettings() (RuntimeSettings, error) {
 		env.Optional("INTERNAL_NETWORKS", &settings.InternalNetworks, ""),
 		env.Optional("TRUST_PROXY_HEADERS", &settings.TrustProxyHeaders, false),
 		env.Optional("PUBLIC_ORIGIN", &settings.PublicOrigin, ""),
+		env.Optional("PLAUSIBLE_HOST", &settings.PlausibleHost, ""),
 	)
 	if err := schema.Load(env.WithWorkingDirectory(root)); err != nil {
 		return RuntimeSettings{}, err

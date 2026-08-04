@@ -64,6 +64,16 @@ func main() {
 		exit(err)
 	}
 	audit.SetPublicOrigin(settings.PublicOrigin)
+	// Plausible, served entirely from this origin. Built before the router
+	// because a misconfiguration here is refused at startup too: a deployment
+	// that names an analytics host and then silently reports to nobody is the
+	// same class of failure as a blank page that answers 200.
+	analytics, err := audit.NewAnalytics(
+		settings.PlausibleHost, settings.PublicOrigin, internalNetworks, slog.Default())
+	if err != nil {
+		exit(err)
+	}
+	audit.SetAnalyticsScript(analytics.ScriptPath())
 	configured, err := configuredproject.ConfigureWith(auditApp)
 	if err != nil {
 		exit(err)
@@ -147,6 +157,10 @@ func main() {
 	handler.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusNoContent)
 	})
+	// Outside the router on purpose -- POST /api/event carries no CSRF token
+	// and the router's CSRF middleware would answer it 403 in production while
+	// passing in local development. Analytics.Mount says the rest.
+	analytics.Mount(handler)
 	handler.Handle("/", router)
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
