@@ -47,6 +47,17 @@ func TestApplicableCapabilitiesAsksOnlyWhatIsWorthAsking(t *testing.T) {
 			want:     []string{CapabilityImageOut},
 		},
 		{
+			// A provider that lists one id in both its text and its image
+			// listing has a model that does both. Asking it only about drawing
+			// would lose the other four answers.
+			name:     "a model in both listings is asked everything",
+			endpoint: withImages,
+			model: Model{
+				ModelID: "omni", ChatCapable: true, OutputModes: "image", Keyless: keyless(true),
+			},
+			want: append(append([]string{}, ChatCapabilities...), CapabilityImageOut),
+		},
+		{
 			name:     "an Ollama-shaped endpoint has no capability surface to ask about",
 			endpoint: ollama,
 			model:    Model{ModelID: "tinyllama", ChatCapable: true, Keyless: keyless(true)},

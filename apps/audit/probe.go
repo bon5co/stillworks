@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // UserAgent identifies us to every operator whose free infrastructure we touch,
@@ -62,6 +63,10 @@ type DiscoveredModel struct {
 	ChatCapable bool
 	InputModes  string
 	OutputModes string
+	// FromImageListing marks a model read from a provider's separate image
+	// listing, which is allowed to add an image modality but never to take a
+	// chat verdict away from an id that also appears in the text listing.
+	FromImageListing bool
 	// Claims is what the provider's own listing says about each capability,
 	// keyed by capability name and absent where it says nothing. It is recorded
 	// beside the measurement, never instead of it: llm7 published tools:true
@@ -251,6 +256,10 @@ func (p *Prober) ProbeImageModels(ctx context.Context, endpoint Endpoint) (Probe
 			discovered[index].Claims = map[string]bool{}
 		}
 		discovered[index].Claims[CapabilityImageOut] = true
+		// An image listing says a model draws. It does not say the same id
+		// cannot also chat, and a provider that publishes one id in both
+		// listings must not have its chat verdict erased by the second read.
+		discovered[index].FromImageListing = true
 	}
 	return probe, discovered
 }
@@ -584,14 +593,28 @@ func parseCompletion(payload []byte) (completion, error) {
 	return completion{}, nil
 }
 
+// firstLine is the short excerpt every recorded reason is built from. It cuts on
+// a rune boundary and drops anything that is not valid UTF-8, because the result
+// goes into a Postgres TEXT column: since capability probes started quoting the
+// model's own prose back into the record -- and models answer in their own
+// scripts -- a byte-sliced multibyte character would be rejected by the server
+// as an invalid encoding, failing the insert and taking the whole cycle with it.
 func firstLine(payload []byte) string {
-	text := strings.TrimSpace(string(payload))
+	text := strings.TrimSpace(strings.ToValidUTF8(string(payload), ""))
 	if index := strings.IndexByte(text, '\n'); index >= 0 {
 		text = text[:index]
 	}
-	const limit = 300
-	if len(text) > limit {
-		text = text[:limit]
+	return clipRunes(text, 300)
+}
+
+// clipRunes cuts a string to a byte budget without splitting a character.
+func clipRunes(text string, limit int) string {
+	if len(text) <= limit {
+		return text
 	}
-	return text
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }

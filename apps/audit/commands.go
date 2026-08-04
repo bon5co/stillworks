@@ -156,17 +156,23 @@ func recordModels(
 			InputModes:  item.InputModes,
 			OutputModes: item.OutputModes,
 		}
-		_, err := db.Bun().NewInsert().
+		insert := db.Bun().NewInsert().
 			Model(&model).
 			On("CONFLICT (endpoint_id, model_id) DO UPDATE").
 			Set("last_seen = now()").
-			Set("tier = EXCLUDED.tier").
-			Set("chat_capable = EXCLUDED.chat_capable").
-			Set("input_modalities = EXCLUDED.input_modalities").
-			Set("output_modalities = EXCLUDED.output_modalities").
-			Returning("id").
-			Exec(ctx)
-		if err != nil {
+			Set("output_modalities = EXCLUDED.output_modalities")
+		if !item.FromImageListing {
+			// Only the provider's main listing gets to say what a model is for.
+			// An id read from an image-only listing that already exists as a
+			// chat model would otherwise be flipped to non-chat here, drop out
+			// of the shelf, and never be chat-probed again -- silently, with
+			// nothing to show that it happened.
+			insert = insert.
+				Set("tier = EXCLUDED.tier").
+				Set("chat_capable = EXCLUDED.chat_capable").
+				Set("input_modalities = EXCLUDED.input_modalities")
+		}
+		if _, err := insert.Returning("id").Exec(ctx); err != nil {
 			return fmt.Errorf("record model %s: %w", item.ID, err)
 		}
 		if err := recordClaims(ctx, db, model.ID, item.Claims); err != nil {

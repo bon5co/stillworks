@@ -79,30 +79,61 @@ func runCapabilityCycle(ctx context.Context, db *database.DB, out io.Writer, pau
 
 	prober := NewProber()
 	for _, endpoint := range endpoints {
-		if err := discoverImageModels(ctx, db, prober, endpoint, out); err != nil {
-			return err
+		// Each endpoint gets its own budget and its own error boundary.
+		// Endpoints are visited in a fixed order, so an endpoint that eats the
+		// whole cycle -- eight image generations at three minutes each would --
+		// would starve every alphabetically later one of capability probes
+		// forever, quietly and identically on every run.
+		endpointCtx, cancel := context.WithTimeout(ctx, endpointBudget)
+		err := probeEndpointCapabilities(endpointCtx, db, prober, endpoint, out, pause)
+		cancel()
+		if err == nil {
+			continue
 		}
-		candidates, err := capabilityCandidates(ctx, db, endpoint)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			return ctx.Err() // the whole cycle was cancelled, not just this endpoint
 		}
-		for index, candidate := range candidates {
-			if index > 0 {
-				if err := sleepOrStop(ctx, pause); err != nil {
-					return err
-				}
-			}
-			result := prober.ProbeCapability(ctx, endpoint, candidate.Model, candidate.Capability)
-			if err := insertProbe(ctx, db, result.Probe); err != nil {
+		fmt.Fprintf(out, "%-14s capability cycle stopped early: %v\n", endpoint.Slug, err)
+	}
+	return nil
+}
+
+// endpointBudget bounds one endpoint's share of a cycle. Eight probes thirty
+// seconds apart is four minutes of deliberate waiting before any provider has
+// answered anything, and an image generation can take minutes on its own.
+const endpointBudget = 15 * time.Minute
+
+func probeEndpointCapabilities(
+	ctx context.Context,
+	db *database.DB,
+	prober *Prober,
+	endpoint Endpoint,
+	out io.Writer,
+	pause time.Duration,
+) error {
+	if err := discoverImageModels(ctx, db, prober, endpoint, out); err != nil {
+		return err
+	}
+	candidates, err := capabilityCandidates(ctx, db, endpoint)
+	if err != nil {
+		return err
+	}
+	for index, candidate := range candidates {
+		if index > 0 {
+			if err := sleepOrStop(ctx, pause); err != nil {
 				return err
 			}
-			if err := recordCapabilityResult(ctx, db, candidate, result); err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "%-14s %-12s %-12s %5dms  %-8s %s\n",
-				endpoint.Slug, candidate.Capability, result.Probe.Outcome,
-				result.Probe.LatencyMS, verdictWord(result.Supported), candidate.Model.ModelID)
 		}
+		result := prober.ProbeCapability(ctx, endpoint, candidate.Model, candidate.Capability)
+		if err := insertProbe(ctx, db, result.Probe); err != nil {
+			return err
+		}
+		if err := recordCapabilityResult(ctx, db, candidate, result); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "%-14s %-12s %-12s %5dms  %-8s %s\n",
+			endpoint.Slug, candidate.Capability, result.Probe.Outcome,
+			result.Probe.LatencyMS, verdictWord(result.Supported), candidate.Model.ModelID)
 	}
 	return nil
 }
@@ -198,21 +229,23 @@ func capabilityKey(modelRowID int64, capability string) string {
 }
 
 // applicableCapabilities decides which questions are worth asking of a model.
+// The two sets are additive rather than exclusive: a provider that lists one id
+// in both its text and its image listing has a model that does both, and asking
+// it only about drawing would lose the other four answers.
 func applicableCapabilities(endpoint Endpoint, model Model) []string {
-	if endpoint.ImageMode != "" && producesImages(model) {
-		return []string{CapabilityImageOut}
-	}
-	if !endpoint.OpenAICompatible || !model.ChatCapable {
-		return nil
-	}
+	var capabilities []string
 	// A model that has not answered a keyless chat call is not asked about its
 	// features: the answer would be a 401 for every capability, and recording
 	// four of those a day against somebody's paid tier is just noise on their
 	// logs and ours.
-	if model.Keyless == nil || !*model.Keyless {
-		return nil
+	verifiedKeyless := model.Keyless != nil && *model.Keyless
+	if endpoint.OpenAICompatible && model.ChatCapable && verifiedKeyless {
+		capabilities = append(capabilities, ChatCapabilities...)
 	}
-	return ChatCapabilities
+	if endpoint.ImageMode != "" && producesImages(model) {
+		capabilities = append(capabilities, CapabilityImageOut)
+	}
+	return capabilities
 }
 
 func producesImages(model Model) bool {
@@ -254,20 +287,33 @@ func recordCapabilityResult(
 	}
 	insert := db.Bun().NewInsert().
 		Model(&row).
-		On("CONFLICT (model_id, capability) DO UPDATE").
-		Set("last_checked = EXCLUDED.last_checked").
-		Set("last_error = EXCLUDED.last_error")
-	if result.Supported != nil {
-		insert = insert.Set("supported = EXCLUDED.supported")
-	}
-	if row.LastOK != nil {
-		insert = insert.Set("last_ok = EXCLUDED.last_ok")
+		On("CONFLICT (model_id, capability) DO UPDATE")
+	for _, column := range capabilityUpdates(result) {
+		insert = insert.Set(column + " = EXCLUDED." + column)
 	}
 	if _, err := insert.Exec(ctx); err != nil {
 		return fmt.Errorf("record capability %s for model %d: %w",
 			candidate.Capability, candidate.Model.ID, err)
 	}
-	return recordKeylessSideEffect(ctx, db, candidate.Model, result.Probe)
+	return recordKeylessSideEffect(ctx, db, candidate, result.Probe)
+}
+
+// capabilityUpdates lists the columns a result is allowed to overwrite. It is a
+// named function with a test rather than three inline conditionals because it
+// carries this project's central rule: a probe that settled nothing may move
+// last_checked and the reason, and must not touch the verdict. One careless
+// refactor of an inline conditional would publish "not supported" every time a
+// provider was busy, and nothing would look wrong.
+func capabilityUpdates(result capabilityResult) []string {
+	updates := []string{"last_checked", "last_error"}
+	if result.Supported == nil {
+		return updates
+	}
+	updates = append(updates, "supported")
+	if *result.Supported {
+		updates = append(updates, "last_ok")
+	}
+	return updates
 }
 
 // recordKeylessSideEffect uses what a capability probe incidentally proved. A
@@ -277,15 +323,28 @@ func recordCapabilityResult(
 // without this their keyless verdict would stay NULL forever while their
 // image_out verdict said yes.
 //
+// A key demand only counts against the model's own surface. Image generation
+// lives on a different route from chat -- OVH serves /v1/images/generations and
+// /v1/chat/completions separately -- so a gated images route must not pull a
+// model off the shelf whose chat surface answers without a key.
+//
 // last_checked is deliberately not touched. It orders the hourly chat rotation,
 // and moving it here would let the daily cycle starve models of liveness checks.
-func recordKeylessSideEffect(ctx context.Context, db *database.DB, model Model, probe Probe) error {
-	update := db.Bun().NewUpdate().Model((*Model)(nil)).Where("m.id = ?", model.ID)
+func recordKeylessSideEffect(
+	ctx context.Context,
+	db *database.DB,
+	candidate capabilityCandidate,
+	probe Probe,
+) error {
+	update := db.Bun().NewUpdate().Model((*Model)(nil)).Where("m.id = ?", candidate.Model.ID)
 	now := time.Now()
 	switch probe.Outcome {
 	case OutcomeOK:
 		update = update.Set("keyless = ?", true).Set("last_ok = ?", now)
 	case OutcomeNeedsKey:
+		if candidate.Capability == CapabilityImageOut && candidate.Model.ChatCapable {
+			return nil
+		}
 		update = update.Set("keyless = ?", false)
 	default:
 		return nil

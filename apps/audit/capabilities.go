@@ -95,7 +95,7 @@ func (p *Prober) probeChatCapability(
 	}
 	if probe.Outcome != OutcomeOK {
 		probe.Error = firstLine(payload)
-		return capabilityResult{Probe: probe, Supported: refusalVerdict(probe.Outcome, status)}
+		return capabilityResult{Probe: probe, Supported: refusalVerdict(probe.Outcome, status, true)}
 	}
 	// A 200 that did not do the thing is a real negative, not an error, so the
 	// outcome stays "ok": the endpoint answered, it just answered without a
@@ -115,16 +115,26 @@ func (p *Prober) probeChatCapability(
 // 429 or a 5xx says nothing about the feature at all, and a 402 from an
 // exhausted anonymous pool -- Pollinations answered all four probes that way on
 // 2026-08-04 -- says even less.
-func refusalVerdict(outcome string, status int) *bool {
+//
+// routeProven separates the two cases. A chat capability is asked on the same
+// path the hourly liveness probe already gets answers from, so a 405 there is
+// the request being rejected, not the road being closed -- llm7 answers exactly
+// that to a json_schema request for meta-Llama-3.1-8B-Instruct-Turbo. An image
+// generation path has no such standing: a seeded path that is slightly wrong, or
+// a proxy that refuses POST, would otherwise be published as a fact about the
+// model.
+func refusalVerdict(outcome string, status int, routeProven bool) *bool {
 	if outcome != OutcomeClientError {
 		return nil
 	}
 	switch status {
-	case http.StatusBadRequest,
-		http.StatusMethodNotAllowed,
-		http.StatusUnsupportedMediaType,
-		http.StatusUnprocessableEntity:
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return supportedFalse()
+	case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
+		if routeProven {
+			return supportedFalse()
+		}
+		return nil
 	default:
 		// 404 and friends are about the route, not the model.
 		return nil
@@ -300,7 +310,10 @@ func verifyToolCall(payload []byte) (*bool, string) {
 		return supportedFalse(), "tool call carried no function name"
 	}
 	var arguments map[string]any
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil {
+	// A nil map here means the provider sent the literal "null", which parses
+	// happily and breaks a caller's tool loop on the first field read. The
+	// contract is a JSON object, so that is a failure like any other.
+	if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err != nil || arguments == nil {
 		return supportedFalse(), "tool call arguments are not a JSON object: " + firstLine([]byte(call.Function.Arguments))
 	}
 	return supportedTrue(), ""
@@ -355,14 +368,17 @@ func verifyStructuredOutput(payload []byte, requireSchema bool) (*bool, string) 
 	return supportedTrue(), ""
 }
 
-// refusalMarkers are how a text-only model says it cannot see. They are matched
-// only against a short reply: a long answer that happens to contain the phrase
-// is describing the image, not refusing it.
+// refusalMarkers are how a text-only model says it cannot see. Every one has to
+// be a whole refusal rather than a fragment that a real description could
+// contain: "no image" was here and would have failed the true answer "Red.
+// There is no image text beyond the fill."
 var refusalMarkers = []string{
 	"cannot see", "can't see", "cannot view", "can't view", "unable to see",
-	"unable to view", "cannot process image", "don't see any image",
-	"no image", "not able to see", "text-based", "text-only",
-	"cannot analyze image", "i do not have the ability to see",
+	"unable to view", "cannot process image", "cannot analyze image",
+	"don't see any image", "do not see any image", "there is no image",
+	"no image was provided", "not able to see",
+	"i am a text-based", "i'm a text-based", "as a text-based",
+	"text-only model", "i do not have the ability to see",
 }
 
 // redWords are what a model calls the colour we actually sent. Vocabulary is
@@ -402,13 +418,16 @@ func verifyVisionAnswer(payload []byte) (*bool, string) {
 		return supportedFalse(), "200 with empty content"
 	}
 	lowered := strings.ToLower(answer)
+	// Naming the colour is checked first because it is the only positive
+	// evidence there is. A model that describes the square and then remarks
+	// that it carries no text has still seen it.
+	if containsAny(lowered, redWords) {
+		return supportedTrue(), ""
+	}
 	for _, marker := range refusalMarkers {
 		if strings.Contains(lowered, marker) {
 			return supportedFalse(), "answered without looking: " + firstLine([]byte(answer))
 		}
-	}
-	if containsAny(lowered, redWords) {
-		return supportedTrue(), ""
 	}
 	if containsAny(lowered, otherColourWords) {
 		return supportedFalse(), "named a colour the image is not: " + firstLine([]byte(answer))
@@ -468,7 +487,7 @@ func (p *Prober) probeImageGeneration(
 	}
 	if probe.Outcome != OutcomeOK {
 		probe.Error = firstLine(payload)
-		return capabilityResult{Probe: probe, Supported: refusalVerdict(probe.Outcome, status)}
+		return capabilityResult{Probe: probe, Supported: refusalVerdict(probe.Outcome, status, false)}
 	}
 	verdict, detail := verifyImageBytes(header.Get("Content-Type"), payload)
 	probe.Error = detail
@@ -526,6 +545,29 @@ func looksLikeImage(payload []byte) bool {
 	return false
 }
 
+// decodeImageHead decodes just enough of a base64 field to read the signature.
+// OVH's answer is 2.5 MB of base64 for one picture and the first few bytes
+// settle the question, so the rest is never decoded.
+//
+// Both alphabets are tried, and a data URI prefix is stripped, because scoring
+// "not an image" on an encoding difference would publish a false negative about
+// an endpoint that works.
+func decodeImageHead(encoded string) ([]byte, error) {
+	if _, remainder, found := strings.Cut(encoded, ";base64,"); found {
+		encoded = remainder
+	}
+	const enough = 64
+	if len(encoded) > enough {
+		encoded = encoded[:enough]
+	}
+	encoded = strings.TrimRight(encoded, "=")
+	decoded, err := base64.RawStdEncoding.DecodeString(encoded)
+	if err == nil {
+		return decoded, nil
+	}
+	return base64.RawURLEncoding.DecodeString(encoded)
+}
+
 func verifyImageBytes(contentType string, payload []byte) (*bool, string) {
 	if strings.HasPrefix(strings.ToLower(contentType), "image/") {
 		if looksLikeImage(payload) {
@@ -547,14 +589,7 @@ func verifyImageBytes(contentType string, payload []byte) (*bool, string) {
 	}
 	entry := envelope.Data[0]
 	if entry.B64JSON != "" {
-		// Only the head is decoded: the signature settles it, and OVH's answer
-		// is 2.5 MB of base64 for one picture.
-		head := entry.B64JSON
-		const enough = 64
-		if len(head) > enough {
-			head = head[:enough]
-		}
-		decoded, err := base64.StdEncoding.WithPadding(base64.NoPadding).DecodeString(strings.TrimRight(head, "="))
+		decoded, err := decodeImageHead(entry.B64JSON)
 		if err != nil {
 			return supportedFalse(), "b64_json is not base64: " + err.Error()
 		}

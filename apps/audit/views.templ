@@ -585,12 +585,15 @@ func statusLabel(status int) string {
 	return fmt.Sprint(status)
 }
 
+// truncate cuts on a rune boundary. The strings it shortens now include model
+// prose quoted back from a capability probe, which is not always ASCII, and half
+// a character rendered into the page is a mojibake box in somebody's tooltip.
 func truncate(value string, limit int) string {
 	value = strings.TrimSpace(value)
 	if len(value) <= limit {
 		return value
 	}
-	return value[:limit] + "…"
+	return clipRunes(value, limit) + "…"
 }
 
 func humanWhenPtr(at *time.Time) string {

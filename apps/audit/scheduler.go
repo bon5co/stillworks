@@ -149,10 +149,10 @@ func runCapabilitiesOnce(ctx context.Context, db *database.DB, logger *slog.Logg
 	started := time.Now()
 	if err := runCapabilityCycle(cycleCtx, db, probeLog{logger}, capabilityPause); err != nil {
 		// A cycle spends most of its time deliberately waiting between
-		// requests, so shutting the process down mid-pause is the normal way
-		// for it to end. Logging that as a failure would cry wolf on every
-		// deploy.
-		if !errors.Is(err, context.Canceled) {
+		// requests, so shutting the process down mid-pause -- or running out of
+		// the cycle's own budget -- is a normal way for it to end. Logging
+		// either as a failure would cry wolf on every deploy.
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			logger.Error("stillworks capability cycle failed", "error", err)
 		}
 		return

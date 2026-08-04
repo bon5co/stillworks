@@ -3,8 +3,10 @@ package audit
 import (
 	"encoding/base64"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func wantVerdict(t *testing.T, got *bool, want *bool, detail string) {
@@ -59,6 +61,15 @@ func TestToolCallVerdicts(t *testing.T) {
 			name: "a tool call with no function name",
 			payload: `{"choices":[{"message":{"tool_calls":[{"type":"function","function":{"name":"",` +
 				`"arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`,
+			want: supportedFalse(),
+		},
+		{
+			// "null" parses without an error and leaves a nil map, so a check
+			// that only looks at the error reads this as working. It breaks a
+			// caller's tool loop on the first field read.
+			name: "arguments that are the literal null",
+			payload: `{"choices":[{"message":{"tool_calls":[{"type":"function","function":{"name":"get_weather",` +
+				`"arguments":"null"}}]},"finish_reason":"tool_calls"}]}`,
 			want: supportedFalse(),
 		},
 		{
@@ -194,6 +205,19 @@ func TestVisionVerdicts(t *testing.T) {
 			want:    nil,
 		},
 		{
+			// A model that really looked can mention what the image does not
+			// contain. Matching a refusal fragment anywhere in the reply, ahead
+			// of the colour, failed exactly this answer.
+			name:    "a correct answer that also mentions an absence",
+			payload: `{"choices":[{"message":{"content":"Red. There is no image text beyond the fill."},"finish_reason":"stop"}]}`,
+			want:    supportedTrue(),
+		},
+		{
+			name:    "an answer in the model's own script",
+			payload: `{"choices":[{"message":{"content":"红色"},"finish_reason":"stop"}]}`,
+			want:    supportedTrue(),
+		},
+		{
 			name:    "a polite refusal is a verified no",
 			payload: `{"choices":[{"message":{"content":"I'm sorry, I cannot see images."},"finish_reason":"stop"}]}`,
 			want:    supportedFalse(),
@@ -250,6 +274,15 @@ func TestImageBytesVerdicts(t *testing.T) {
 			want:        supportedTrue(),
 		},
 		{
+			// Some providers hand back the whole data URI rather than bare
+			// base64. Scoring "not an image" on that would publish a false
+			// negative about an endpoint that works.
+			name:        "an envelope carrying a data URI",
+			contentType: "application/json",
+			payload:     `{"data":[{"b64_json":"data:image/png;base64,` + encoded + `"}]}`,
+			want:        supportedTrue(),
+		},
+		{
 			name:        "an envelope whose base64 is not an image",
 			contentType: "application/json",
 			payload:     `{"data":[{"b64_json":"` + base64.StdEncoding.EncodeToString([]byte("not an image at all")) + `"}]}`,
@@ -289,26 +322,59 @@ func TestImageBytesVerdicts(t *testing.T) {
 // feature and must leave the stored answer alone.
 func TestOnlyADeliberateRejectionSetsAVerdict(t *testing.T) {
 	cases := []struct {
-		name    string
-		outcome string
-		status  int
-		want    *bool
+		name        string
+		outcome     string
+		status      int
+		routeProven bool
+		want        *bool
 	}{
-		{"OVH: feature 'tool calls' is not currently supported", OutcomeClientError, http.StatusBadRequest, supportedFalse()},
-		{"llm7: upstream rejected the json_schema request", OutcomeClientError, http.StatusMethodNotAllowed, supportedFalse()},
-		{"unprocessable request body", OutcomeClientError, http.StatusUnprocessableEntity, supportedFalse()},
-		{"a 404 is about the route, not the model", OutcomeClientError, http.StatusNotFound, nil},
-		{"OVH rate limit", OutcomeRateLimited, http.StatusTooManyRequests, nil},
-		{"pollinations anonymous pool empty", OutcomeRateLimited, http.StatusPaymentRequired, nil},
-		{"a provider that started demanding a key", OutcomeNeedsKey, http.StatusUnauthorized, nil},
-		{"an edge turning us away", OutcomeBlocked, http.StatusForbidden, nil},
-		{"a bad gateway", OutcomeServerError, http.StatusBadGateway, nil},
-		{"a timeout", OutcomeTimeout, 0, nil},
+		{"OVH: feature 'tool calls' is not currently supported", OutcomeClientError, http.StatusBadRequest, true, supportedFalse()},
+		{"llm7: upstream rejected the json_schema request", OutcomeClientError, http.StatusMethodNotAllowed, true, supportedFalse()},
+		{"unprocessable request body", OutcomeClientError, http.StatusUnprocessableEntity, true, supportedFalse()},
+		{"a 404 is about the route, not the model", OutcomeClientError, http.StatusNotFound, true, nil},
+		// The image path has never answered anything, so a method refusal there
+		// is as likely to be a wrong seeded path or a proxy as a fact about the
+		// model.
+		{"a method refusal on a path we have never seen work", OutcomeClientError, http.StatusMethodNotAllowed, false, nil},
+		{"a rejected image request body", OutcomeClientError, http.StatusBadRequest, false, supportedFalse()},
+		{"OVH rate limit", OutcomeRateLimited, http.StatusTooManyRequests, true, nil},
+		{"pollinations anonymous pool empty", OutcomeRateLimited, http.StatusPaymentRequired, true, nil},
+		{"a provider that started demanding a key", OutcomeNeedsKey, http.StatusUnauthorized, true, nil},
+		{"an edge turning us away", OutcomeBlocked, http.StatusForbidden, true, nil},
+		{"a bad gateway", OutcomeServerError, http.StatusBadGateway, true, nil},
+		{"a timeout", OutcomeTimeout, 0, true, nil},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			wantVerdict(t, refusalVerdict(testCase.outcome, testCase.status), testCase.want, "")
+			got := refusalVerdict(testCase.outcome, testCase.status, testCase.routeProven)
+			wantVerdict(t, got, testCase.want, "")
 		})
+	}
+}
+
+// The rule the whole project turns on, at the point where it is written to the
+// database: a probe that settled nothing moves the timestamp and the reason and
+// leaves the verdict alone.
+func TestAnInconclusiveProbeNeverOverwritesAVerdict(t *testing.T) {
+	inconclusive := capabilityUpdates(capabilityResult{})
+	if slices.Contains(inconclusive, "supported") {
+		t.Fatalf("a settled-nothing probe must not write a verdict: %v", inconclusive)
+	}
+	if !slices.Contains(inconclusive, "last_checked") || !slices.Contains(inconclusive, "last_error") {
+		t.Fatalf("a settled-nothing probe must still record that it happened: %v", inconclusive)
+	}
+	if slices.Contains(inconclusive, "last_ok") {
+		t.Fatalf("nothing worked, so nothing worked at a time: %v", inconclusive)
+	}
+
+	failed := capabilityUpdates(capabilityResult{Supported: supportedFalse()})
+	if !slices.Contains(failed, "supported") || slices.Contains(failed, "last_ok") {
+		t.Fatalf("a clean negative writes the verdict and not the success time: %v", failed)
+	}
+
+	worked := capabilityUpdates(capabilityResult{Supported: supportedTrue()})
+	if !slices.Contains(worked, "supported") || !slices.Contains(worked, "last_ok") {
+		t.Fatalf("a verified yes writes both: %v", worked)
 	}
 }
 
@@ -353,6 +419,28 @@ func TestVisionProbeImageIsARealPNG(t *testing.T) {
 	}
 	if !looksLikeImage(decoded) {
 		t.Fatal("the vision probe is not sending an image")
+	}
+}
+
+// The recorded reason now quotes the model's own prose, and models answer in
+// their own scripts. A byte-sliced multibyte character is rejected by Postgres
+// as an invalid encoding, which fails the insert and takes the cycle with it.
+func TestRecordedReasonsAreAlwaysValidUTF8(t *testing.T) {
+	long := strings.Repeat("红", 400) // 1200 bytes, cut lands mid-character
+	excerpt := firstLine([]byte(long))
+	if !utf8.ValidString(excerpt) {
+		t.Fatalf("firstLine produced invalid UTF-8: %q", excerpt)
+	}
+	if excerpt == "" || len([]rune(excerpt)) >= 400 {
+		t.Fatalf("firstLine did not clip: %d runes", len([]rune(excerpt)))
+	}
+	// Bytes that are not text at all reach here too: an image probe records the
+	// first line of whatever came back.
+	if got := firstLine([]byte{0xFF, 0xD8, 0xFF, 'j', 'p', 'e', 'g'}); !utf8.ValidString(got) {
+		t.Fatalf("firstLine passed raw bytes through: %q", got)
+	}
+	if got := truncate(long, 300); !utf8.ValidString(got) {
+		t.Fatalf("truncate produced invalid UTF-8: %q", got)
 	}
 }
 
