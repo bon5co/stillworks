@@ -27,31 +27,13 @@ func Commands(services management.ProjectServices) []management.Command {
 			Summary: "Insert or refresh the seeded endpoint claims, both shelves",
 			Run: func(ctx context.Context, _ []string, streams management.Streams) error {
 				return withDatabase(ctx, services, func(db *database.DB) error {
+					// The same call the server makes on every cycle, so running
+					// this by hand can never produce a different database than
+					// letting the deployment do it.
+					if err := SeedClaims(ctx, db); err != nil {
+						return err
+					}
 					for _, endpoint := range SeedEndpoints {
-						_, err := db.Bun().NewInsert().
-							Model(&endpoint).
-							On("CONFLICT (slug) DO UPDATE").
-							Set("provider = EXCLUDED.provider").
-							Set("base_url = EXCLUDED.base_url").
-							Set("chat_path = EXCLUDED.chat_path").
-							Set("models_path = EXCLUDED.models_path").
-							// auth_mode and key_env travel together: an endpoint
-							// moved between the shelves without its key variable
-							// would be probed bare and recorded as needing a key.
-							Set("auth_mode = EXCLUDED.auth_mode").
-							Set("key_env = EXCLUDED.key_env").
-							Set("chat_probes_per_cycle = EXCLUDED.chat_probes_per_cycle").
-							Set("docs_url = EXCLUDED.docs_url").
-							Set("notes = EXCLUDED.notes").
-							Set("openai_compatible = EXCLUDED.openai_compatible").
-							Set("image_path = EXCLUDED.image_path").
-							Set("image_mode = EXCLUDED.image_mode").
-							Set("image_models_path = EXCLUDED.image_models_path").
-							Set("updated_at = now()").
-							Exec(ctx)
-						if err != nil {
-							return fmt.Errorf("seed %s: %w", endpoint.Slug, err)
-						}
 						fmt.Fprintf(streams.Out, "seeded %s\n", endpoint.Slug)
 					}
 					return nil
