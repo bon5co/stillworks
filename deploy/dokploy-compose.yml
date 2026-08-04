@@ -10,7 +10,7 @@
 # and an alias collision there would be an ugly thing to debug.
 services:
   app:
-    image: lodimup/stillworks:0.3.0
+    image: lodimup/stillworks:0.5.0
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://stillworks:${POSTGRES_PASSWORD}@stillworks-db:5432/stillworks?sslmode=disable
