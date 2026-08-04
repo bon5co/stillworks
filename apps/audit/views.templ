@@ -11,6 +11,7 @@ templ header() {
 		<a href="/">stillworks</a>
 		<a href="/llm/">free LLM endpoints</a>
 		<a href="/mcp/">MCP servers</a>
+		<a href="/stats">our traffic</a>
 	</div>
 }
 
@@ -155,6 +156,114 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 				}
 			</tbody>
 		</table>
+	</div>
+}
+
+templ StatsPage(report TrafficReport, dropped int64) {
+	<div class="sw">
+		@header()
+		<h1>Our own numbers</h1>
+		<p class="tag">
+			This site's whole claim is that a directory should publish what it measured and when.
+			That standard applies to its own traffic too.
+		</p>
+		<div class="stats">
+			<div class="stat">
+				<span class="stat-n">{ fmt.Sprint(report.Totals.APICalls) }</span>
+				<span class="stat-l">runtime API calls</span>
+			</div>
+			<div class="stat">
+				<span class="stat-n">{ fmt.Sprint(report.Totals.Sessions) }</span>
+				<span class="stat-l">visitors</span>
+			</div>
+			<div class="stat">
+				<span class="stat-n">{ fmt.Sprint(report.Totals.PageViews) }</span>
+				<span class="stat-l">page views</span>
+			</div>
+			<div class="stat">
+				<span class="stat-n">{ fmt.Sprint(report.Totals.APIClients) }</span>
+				<span class="stat-l">distinct API clients</span>
+			</div>
+		</div>
+		<p class="muted">
+			All-time, since { humanWhenPtr(report.Totals.FirstAt) }.
+			if report.Totals.CrawlerHits > 0 {
+				{ fmt.Sprintf("%d crawler hit(s) recorded and excluded from every count above.", report.Totals.CrawlerHits) }
+			}
+		</p>
+		<h2>{ fmt.Sprintf("Last %d days", statsDays) }</h2>
+		if len(report.Days) == 0 {
+			<p class="muted">Nothing recorded yet. That is a real answer, not a loading state.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Day (UTC)</th><th>Visitors</th><th>Page views</th><th>API calls</th></tr>
+				</thead>
+				<tbody>
+					for _, day := range report.Days {
+						<tr>
+							<td class="when">{ day.Day.Format("2006-01-02") }</td>
+							<td>{ fmt.Sprint(day.Sessions) }</td>
+							<td>{ fmt.Sprint(day.PageViews) }</td>
+							<td>{ fmt.Sprint(day.APICalls) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<h2>Where visitors came from</h2>
+		if len(report.Referrers) == 0 {
+			<p class="muted">No referring host has sent anybody yet.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Referring host</th><th>Hits</th><th>Visitors</th></tr>
+				</thead>
+				<tbody>
+					for _, referrer := range report.Referrers {
+						<tr>
+							<td>{ referrer.Host }</td>
+							<td>{ fmt.Sprint(referrer.Hits) }</td>
+							<td>{ fmt.Sprint(referrer.Visitors) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<h2>What was asked for</h2>
+		if len(report.Paths) == 0 {
+			<p class="muted">Nothing yet.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Path</th><th>Kind</th><th>Hits</th></tr>
+				</thead>
+				<tbody>
+					for _, path := range report.Paths {
+						<tr>
+							<td><code>{ path.Path }</code></td>
+							<td class="muted">{ path.Kind }</td>
+							<td>{ fmt.Sprint(path.Hits) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		<h2>How this is counted</h2>
+		<ul class="muted">
+			<li>
+				A visitor is one salted hash of address and user agent, on one UTC day. The hash
+				input includes the date, so it cannot be followed from one day to the next, and
+				the address itself is never written down.
+			</li>
+			<li>Requests to this page and to <code>/api/stats</code> are never counted. Reading the scoreboard must not move it.</li>
+			<li>Crawlers are recorded and excluded. Deleting them would hide a traffic source; counting them would turn a search engine into an audience.</li>
+			<li>Counts are written from a bounded in-memory buffer, so a restart can lose up to two seconds of events.</li>
+			if dropped > 0 {
+				<li class="warn">{ fmt.Sprintf("%d event(s) were dropped because the write buffer was full. Under-counting is reported, never hidden.", dropped) }</li>
+			}
+		</ul>
+		<p class="muted">Same numbers as JSON: <code>curl https://stillworks.supercapybara.com/api/stats</code></p>
 	</div>
 }
 

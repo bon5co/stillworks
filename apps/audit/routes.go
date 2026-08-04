@@ -20,6 +20,15 @@ import (
 // apiLimit caps how many verified models the runtime API returns per call.
 const apiLimit = 50
 
+// statsDays is the window the traffic page charts; statsLimit caps the
+// referrer and path tables. Totals are always all-time -- the outcome this
+// project is measured against is cumulative, so a rolling headline number
+// would flatter it.
+const (
+	statsDays  = 14
+	statsLimit = 10
+)
+
 //go:embed static/app.css
 var appCSS []byte
 
@@ -30,22 +39,30 @@ var stylesheetPath = fmt.Sprintf("/static/stillworks/app.%x.css", sha256.Sum224(
 
 // RoutesWithServices is the framework's hook for an app that needs the
 // long-lived database pool rather than only a router.
-func (*App) RoutesWithServices(router chi.Router, services web.RuntimeServices) {
-	handlers := &handlers{db: services.Database}
+func (a *App) RoutesWithServices(router chi.Router, services web.RuntimeServices) {
+	handlers := &handlers{db: services.Database, recorder: a.recorder}
+	track := a.recorder.Track
 
 	router.Get(stylesheetPath, serveStylesheet)
 
-	router.Get("/", handlers.home)
-	router.Get("/llm/", handlers.shelf)
-	router.Get("/llm/{slug}", handlers.endpoint)
-	router.Get("/mcp/", handlers.mcp)
+	router.Get("/", track(KindPage, handlers.home))
+	router.Get("/llm/", track(KindPage, handlers.shelf))
+	router.Get("/llm/{slug}", track(KindPage, handlers.endpoint))
+	router.Get("/mcp/", track(KindPage, handlers.mcp))
 
-	router.Get("/api/llm/up", handlers.apiUp)
-	router.Get("/api/llm/{slug}", handlers.apiEndpoint)
+	router.Get("/api/llm/up", track(KindAPI, handlers.apiUp))
+	router.Get("/api/llm/{slug}", track(KindAPI, handlers.apiEndpoint))
+
+	// The two routes that report the numbers are the two routes that are never
+	// counted. Reading a scoreboard must not move it, and an outcome contract
+	// checked by a page that inflates itself is not an outcome contract.
+	router.Get("/stats", handlers.stats)
+	router.Get("/api/stats", handlers.apiStats)
 }
 
 type handlers struct {
-	db *database.DB
+	db       *database.DB
+	recorder *Recorder
 }
 
 func (h *handlers) home(response http.ResponseWriter, request *http.Request) {
@@ -156,6 +173,35 @@ func (h *handlers) apiEndpoint(response http.ResponseWriter, request *http.Reque
 		"endpoint":     row,
 		"models":       models,
 		"probes":       probes,
+	})
+}
+
+// stats publishes this site's own traffic. A directory that tells other people
+// how often their endpoints answered, while keeping its own numbers private,
+// is asking for a trust it will not extend.
+func (h *handlers) stats(response http.ResponseWriter, request *http.Request) {
+	report, err := Traffic(request.Context(), h.db, statsDays, statsLimit)
+	if err != nil {
+		serverError(response, request, err)
+		return
+	}
+	render(response, request, "Traffic — stillworks", StatsPage(report, h.recorder.Dropped()))
+}
+
+func (h *handlers) apiStats(response http.ResponseWriter, request *http.Request) {
+	report, err := Traffic(request.Context(), h.db, statsDays, statsLimit)
+	if err != nil {
+		apiError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"generated_at": time.Now().UTC(),
+		"window_days":  statsDays,
+		"note": "Sessions are distinct daily visitors: a salted hash of address and user agent that " +
+			"changes every UTC day and is never stored alongside the address itself. Requests to " +
+			"/stats and /api/stats are not counted. Crawler hits are recorded and excluded.",
+		"dropped_events": h.recorder.Dropped(),
+		"traffic":        report,
 	})
 }
 
