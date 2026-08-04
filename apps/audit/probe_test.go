@@ -123,6 +123,91 @@ func TestParseModelsAcceptsTheThreeShapesServedInTheWild(t *testing.T) {
 	}
 }
 
+// Both listings are verbatim from 2026-08-04, trimmed to the fields a claim is
+// read from. The claims are recorded so the shelf can show them beside the
+// measurement -- llm7 claims tools for every turbo model and json_mode for one
+// whose json_schema request comes back 405.
+func TestParseModelsRecordsWhatTheProviderClaims(t *testing.T) {
+	llm7 := `{"data":[{"id":"gpt-oss:20b","model_type":"chat","tier":"turbo",` +
+		`"modalities":{"input":["text"],"output":["text"]},"json_mode":true,"tools_calling":true,` +
+		`"capabilities":{"vision":false,"tools":true,"json_mode":true,"reasoning":true}}]}`
+	models, err := parseModels([]byte(llm7))
+	if err != nil {
+		t.Fatalf("parseModels: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1", len(models))
+	}
+	model := models[0]
+	if !model.ChatCapable {
+		t.Fatal("model_type chat must settle chat capability")
+	}
+	if model.InputModes != "text" || model.OutputModes != "text" {
+		t.Fatalf("nested modalities were not read: in=%q out=%q", model.InputModes, model.OutputModes)
+	}
+	if got, want := model.Claims[CapabilityTools], true; got != want {
+		t.Fatalf("tools claim = %v, want %v", got, want)
+	}
+	// vision:false is a claim, not an absence: the map has to carry it so a
+	// verified yes can be shown as contradicting the provider.
+	claimed, present := model.Claims[CapabilityVision]
+	if !present || claimed {
+		t.Fatalf("vision claim = %v present=%v, want false and present", claimed, present)
+	}
+	// json_mode is the weaker mode's name, so it is not read as a json_schema
+	// claim. That distinction is the whole reason the two are tracked apart.
+	if _, present := model.Claims[CapabilityJSONSchema]; present {
+		t.Fatal("json_mode must not be recorded as a json_schema claim")
+	}
+	if !model.Claims[CapabilityJSONObject] {
+		t.Fatal("json_mode must be recorded as a json_object claim")
+	}
+
+	pollinations := `[{"name":"openai-fast","tier":"anonymous","input_modalities":["text"],` +
+		`"output_modalities":["text"],"tools":true,"vision":false}]`
+	models, err = parseModels([]byte(pollinations))
+	if err != nil {
+		t.Fatalf("parseModels: %v", err)
+	}
+	if !models[0].Claims[CapabilityTools] {
+		t.Fatal("a top-level tools flag is still a claim")
+	}
+}
+
+// llm7 labels nine of its models image or video. Those are never chat probed,
+// and the image ones are the only candidates for an image generation verdict.
+func TestModelTypeSettlesWhatAModelIsFor(t *testing.T) {
+	payload := `{"data":[{"id":"gpt-image-2","model_type":"image","tier":"pro"},` +
+		`{"id":"gemini-veo31","model_type":"video","tier":"pro"}]}`
+	models, err := parseModels([]byte(payload))
+	if err != nil {
+		t.Fatalf("parseModels: %v", err)
+	}
+	for _, model := range models {
+		if model.ChatCapable {
+			t.Fatalf("%q is not a chat model", model.ID)
+		}
+	}
+	if !models[0].Claims[CapabilityImageOut] {
+		t.Fatal("a model the provider calls an image model claims image output")
+	}
+	if _, present := models[1].Claims[CapabilityImageOut]; present {
+		t.Fatal("a video model does not claim image output")
+	}
+}
+
+// image.pollinations.ai/models answers ["sana"] and nothing else. Without this
+// shape the image endpoint has no model to hang a verdict on.
+func TestParseModelsAcceptsABareArrayOfNames(t *testing.T) {
+	models, err := parseModels([]byte(`["sana"]`))
+	if err != nil {
+		t.Fatalf("parseModels: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "sana" {
+		t.Fatalf("got %+v, want one model sana", models)
+	}
+}
+
 func TestParseModelsRejectsUnrecognisedBody(t *testing.T) {
 	if _, err := parseModels([]byte(`{"error":"nope"}`)); err == nil {
 		t.Fatal("expected an error for a body carrying no model ids")

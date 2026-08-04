@@ -98,7 +98,13 @@ templ shelfFilters(query ShelfQuery, slugs []string) {
 	</form>
 }
 
-templ ShelfPage(rows []ShelfRow, working []WorkingModel, query ShelfQuery, slugs []string) {
+templ ShelfPage(
+	rows []ShelfRow,
+	working []WorkingModel,
+	drawing []WorkingModel,
+	query ShelfQuery,
+	slugs []string,
+) {
 	<div class="sw">
 		@header()
 		<h1>Free LLM endpoints</h1>
@@ -125,6 +131,7 @@ templ ShelfPage(rows []ShelfRow, working []WorkingModel, query ShelfQuery, slugs
 							@workingHeader(query, "model", "Model")
 							@workingHeader(query, "endpoint", "Endpoint")
 							<th>Tier</th>
+							<th>Tools</th><th>Schema</th><th>JSON</th><th>Vision</th>
 							@workingHeader(query, "latency", "Latency")
 							@workingHeader(query, "reliability", "Worked")
 							@workingHeader(query, "verified", "Verified")
@@ -137,6 +144,9 @@ templ ShelfPage(rows []ShelfRow, working []WorkingModel, query ShelfQuery, slugs
 								<td><code>{ model.ModelID }</code></td>
 								<td><a href={ templ.SafeURL("/llm/" + model.Slug) }>{ model.Slug }</a></td>
 								<td class="muted">{ orDash(model.Tier) }</td>
+								for _, capability := range ChatCapabilities {
+									@capabilityCell(model.Capabilities, capability)
+								}
 								<td class="when">{ latency(model.LatencyMS) }</td>
 								<td class="when">{ reliability(model.Successes, model.Attempts) }</td>
 								<td class="when">{ humanWhenPtr(model.LastOK) }</td>
@@ -148,8 +158,38 @@ templ ShelfPage(rows []ShelfRow, working []WorkingModel, query ShelfQuery, slugs
 					</tbody>
 				</table>
 			</div>
+			<p class="muted">
+				A feature column says what a real call proved, not what the provider's own
+				listing claims. A dash is a question nobody has asked yet, which is never the
+				same as a no. Ask the API for the ones you need:
+			</p>
+			<pre>curl 'https://stillworks.supercapybara.com/api/llm/up?feature=tools,json_schema'</pre>
 			<h2>Call one</h2>
 			<pre>{ snippet(working[0]) }</pre>
+		}
+		<h2>Image generation</h2>
+		if len(drawing) == 0 {
+			<p class="muted">No keyless image endpoint is currently verified.</p>
+		} else {
+			<table>
+				<thead>
+					<tr><th>Model</th><th>Endpoint</th><th>Draws</th><th>Verified</th></tr>
+				</thead>
+				<tbody>
+					for _, model := range drawing {
+						<tr>
+							<td><code>{ model.ModelID }</code></td>
+							<td><a href={ templ.SafeURL("/llm/" + model.Slug) }>{ model.Slug }</a></td>
+							@capabilityCell(model.Capabilities, CapabilityImageOut)
+							<td class="when">{ humanWhenPtr(model.LastOK) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			<p class="muted">
+				Verified by asking for a picture and checking the bytes that came back are
+				really an image, not by trusting a 200.
+			</p>
 		}
 		<h2>Every endpoint we track</h2>
 		if len(rows) == 0 {
@@ -223,30 +263,44 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 			<p class="lede muted">{ row.Notes }</p>
 		}
 		<h2>Models</h2>
-		<table>
-			<thead>
-				<tr><th>Model</th><th>Tier</th><th>Keyless</th><th>Chat</th><th>Worked</th><th>Last checked</th><th>Last listed</th></tr>
-			</thead>
-			<tbody>
-				for _, model := range models {
+		<div class="scroll">
+			<table>
+				<thead>
 					<tr>
-						<td><code>{ model.ModelID }</code></td>
-						<td class="muted">{ orDash(model.Tier) }</td>
-						<td>{ keylessLabel(model.Keyless) }</td>
-						<td class="muted">
-							if model.ChatCapable {
-								yes
-							} else {
-								not a chat model
-							}
-						</td>
-							<td class="when">{ reliability(model.Successes, model.Attempts) }</td>
-						<td class="when">{ humanWhenPtr(model.LastChecked) }</td>
-						<td class="when">{ humanWhen(model.LastSeen) }</td>
+						<th>Model</th><th>Tier</th><th>Keyless</th><th>Chat</th>
+						<th>Tools</th><th>Schema</th><th>JSON</th><th>Vision</th><th>Images</th>
+						<th>Worked</th><th>Last checked</th><th>Last listed</th>
 					</tr>
-				}
-			</tbody>
-		</table>
+				</thead>
+				<tbody>
+					for _, model := range models {
+						<tr>
+							<td><code>{ model.ModelID }</code></td>
+							<td class="muted">{ orDash(model.Tier) }</td>
+							<td>{ keylessLabel(model.Keyless) }</td>
+							<td class="muted">
+								if model.ChatCapable {
+									yes
+								} else {
+									not a chat model
+								}
+							</td>
+							for _, capability := range Capabilities {
+								@capabilityCell(model.Capabilities, capability)
+							}
+							<td class="when">{ reliability(model.Successes, model.Attempts) }</td>
+							<td class="when">{ humanWhenPtr(model.LastChecked) }</td>
+							<td class="when">{ humanWhen(model.LastSeen) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+		<p class="muted">
+			Feature columns are measurements. Where the provider's own listing claims a
+			feature we could not get out of it, the cell says so — that disagreement is the
+			reason this shelf exists.
+		</p>
 		<h2>Raw probe log</h2>
 		<p class="muted">Our working, so you can check it rather than trust it.</p>
 		<table>
@@ -376,6 +430,21 @@ templ StatsPage(report TrafficReport, dropped int64) {
 		</ul>
 		<p class="muted">Same numbers as JSON: <code>curl https://stillworks.supercapybara.com/api/stats</code></p>
 	</div>
+}
+
+// capabilityCell renders one feature verdict. A capability nobody has asked
+// about renders as a dash and never as a "no": the whole tri-state exists so
+// that "we have not checked" and "it does not work" stay different answers.
+templ capabilityCell(records map[string]CapabilityRecord, capability string) {
+	if record, held := records[capability]; !held || record.Supported == nil {
+		<td class="muted" title="never verified">—</td>
+	} else if *record.Supported {
+		<td class="ok" title={ "verified " + humanWhenPtr(record.LastOK) }>yes</td>
+	} else if record.ClaimContradicted() {
+		<td class="bad" title={ truncate(record.LastError, 160) }>no, claimed</td>
+	} else {
+		<td class="bad" title={ truncate(record.LastError, 160) }>no</td>
+	}
 }
 
 // TryPage is what a visitor sees with JavaScript switched off, or when their
@@ -516,12 +585,15 @@ func statusLabel(status int) string {
 	return fmt.Sprint(status)
 }
 
+// truncate cuts on a rune boundary. The strings it shortens now include model
+// prose quoted back from a capability probe, which is not always ASCII, and half
+// a character rendered into the page is a mojibake box in somebody's tooltip.
 func truncate(value string, limit int) string {
 	value = strings.TrimSpace(value)
 	if len(value) <= limit {
 		return value
 	}
-	return value[:limit] + "…"
+	return clipRunes(value, limit) + "…"
 }
 
 func humanWhenPtr(at *time.Time) string {
