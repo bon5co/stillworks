@@ -106,9 +106,9 @@ func TestOurOwnTrafficIsNeverForwarded(t *testing.T) {
 		reached = true
 	}))
 	defer upstream.Close()
-	analytics := newTestAnalytics(t, upstream.URL, "106.73.62.0, 10.0.0.0/8")
+	analytics := newTestAnalytics(t, upstream.URL, "203.0.113.7, 10.0.0.0/8")
 
-	for _, address := range []string{"106.73.62.0", "10.4.5.6"} {
+	for _, address := range []string{"203.0.113.7", "10.4.5.6"} {
 		response := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, AnalyticsEventPath, strings.NewReader(`{"n":"pageview"}`))
 		request.Header.Set("CF-Connecting-IP", address)
@@ -148,7 +148,7 @@ func TestAVisitorsAddressAndAgentReachPlausible(t *testing.T) {
 		_, _ = io.WriteString(response, "ok")
 	}))
 	defer upstream.Close()
-	analytics := newTestAnalytics(t, upstream.URL, "106.73.62.0")
+	analytics := newTestAnalytics(t, upstream.URL, "203.0.113.7")
 
 	const payload = `{"n":"pageview","u":"https://stillworks.supercapybara.com/llm/","d":"stillworks.supercapybara.com"}`
 	response := httptest.NewRecorder()

@@ -16,8 +16,8 @@ func TestClientIPPrefersCloudflareHeader(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/llm/", nil)
 	request.RemoteAddr = "10.0.0.7:54321"
 	request.Header.Set("X-Forwarded-For", "172.71.150.4")
-	request.Header.Set("CF-Connecting-IP", "106.73.62.0")
-	if got := clientIP(request); got != "106.73.62.0" {
+	request.Header.Set("CF-Connecting-IP", "203.0.113.7")
+	if got := clientIP(request); got != "203.0.113.7" {
 		t.Fatalf("clientIP = %q, want the Cloudflare-supplied client address", got)
 	}
 
@@ -222,13 +222,13 @@ func TestCloseWaitsForTheWriterAndTimesOut(t *testing.T) {
 func TestInternalNetworksMatchAddressesAndBlocks(t *testing.T) {
 	// The addresses this recognises decide which numbers the kill rule reads,
 	// so both directions are asserted: ours must match, everyone else must not.
-	networks := ParseInternalNetworks(" 106.73.62.0 , 10.0.0.0/8 , nonsense , ", slog.New(slog.NewTextHandler(io.Discard, nil)))
-	for _, address := range []string{"106.73.62.0", "10.4.5.6", "10.0.0.1"} {
+	networks := ParseInternalNetworks(" 203.0.113.7 , 10.0.0.0/8 , nonsense , ", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, address := range []string{"203.0.113.7", "10.4.5.6", "10.0.0.1"} {
 		if !networks.Contains(address) {
 			t.Errorf("Contains(%q) = false, want true", address)
 		}
 	}
-	for _, address := range []string{"106.73.62.1", "203.0.113.9", "", "not-an-address"} {
+	for _, address := range []string{"203.0.113.8", "203.0.113.9", "", "not-an-address"} {
 		if networks.Contains(address) {
 			t.Errorf("Contains(%q) = true, want false", address)
 		}
@@ -247,10 +247,10 @@ func TestRecordMarksOurOwnRequests(t *testing.T) {
 		events:   make(chan TrafficEvent, 4),
 		salt:     "test-salt",
 		now:      time.Now,
-		internal: ParseInternalNetworks("106.73.62.0", nil),
+		internal: ParseInternalNetworks("203.0.113.7", nil),
 	}
 	ours := httptest.NewRequest(http.MethodGet, "/llm/", nil)
-	ours.Header.Set("X-Forwarded-For", "106.73.62.0")
+	ours.Header.Set("X-Forwarded-For", "203.0.113.7")
 	recorder.Record(ours, KindPage, http.StatusOK)
 
 	theirs := httptest.NewRequest(http.MethodGet, "/llm/", nil)
