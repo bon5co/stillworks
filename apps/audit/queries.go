@@ -754,6 +754,39 @@ func ModelsFor(ctx context.Context, db *database.DB, slug string, auth string) (
 	return rows, nil
 }
 
+// CapabilityEvidence is the newest probe behind each feature verdict on one
+// endpoint: one row per capability, whatever its outcome.
+//
+// It exists because the raw log is a window on time, not on kinds. Chat probes
+// run on every cycle and feature probes do not, so the last forty rows of a busy
+// endpoint can be forty chat calls and nothing else — and then the verdict in a
+// Tools column has no visible working anywhere on the page it points at. This
+// query is keyed on the kind instead, so every published verdict has a call
+// underneath it that a visitor can read.
+//
+// A failure is as much the evidence as a success. The row that says a feature
+// was refused is exactly the one somebody doubting a "no" came to see.
+func CapabilityEvidence(ctx context.Context, db *database.DB, slug string) ([]ProbeRow, error) {
+	var rows []ProbeRow
+	err := db.Bun().NewRaw(`
+		SELECT DISTINCT ON (p.kind)
+		       p.started_at, p.kind, p.outcome, p.http_status, p.latency_ms, p.model_used, p.error
+		FROM llm_probes p
+		JOIN llm_endpoints e ON e.id = p.endpoint_id
+		WHERE e.slug = ? AND p.kind IN (?)
+		ORDER BY p.kind, p.started_at DESC
+	`, slug, bun.In(Capabilities)).Scan(ctx, &rows)
+	if err != nil {
+		return nil, err
+	}
+	// Published order, not alphabetical: these read next to the columns they
+	// explain, and DISTINCT ON forces the sort to start with the kind.
+	slices.SortStableFunc(rows, func(a, b ProbeRow) int {
+		return slices.Index(Capabilities, a.Kind) - slices.Index(Capabilities, b.Kind)
+	})
+	return rows, nil
+}
+
 // RecentProbes is the raw evidence for one endpoint.
 func RecentProbes(ctx context.Context, db *database.DB, slug string, limit int) ([]ProbeRow, error) {
 	var rows []ProbeRow

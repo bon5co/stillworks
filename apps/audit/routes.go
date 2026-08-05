@@ -326,13 +326,20 @@ func (h *handlers) endpoint(response http.ResponseWriter, request *http.Request)
 		serverError(response, request, err)
 		return
 	}
+	// Fetched separately from the log above, because the log is the last forty
+	// calls of any kind and a feature probe can be older than all of them.
+	evidence, err := CapabilityEvidence(request.Context(), h.db, slug)
+	if err != nil {
+		serverError(response, request, err)
+		return
+	}
 	render(response, request, page{
 		Title: slug + " — stillworks",
 		Description: fmt.Sprintf(
 			"%s: the base URL, a working call, every model we have checked and the raw probe log behind each verdict.",
 			row.Provider),
 		Canonical: "/llm/" + slug,
-	}, EndpointPage(row, models, probes))
+	}, EndpointPage(row, models, probes, evidence))
 }
 
 func (h *handlers) mcp(response http.ResponseWriter, request *http.Request) {
