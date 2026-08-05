@@ -245,6 +245,12 @@ templ board(rows []WorkingModel, query ShelfQuery) {
 				<span class="item"><span class="dot no"></span> we called it and it failed</span>
 				<span class="item"><span class="dot claimed"></span> provider claims it, our call never proved it</span>
 				<span class="item"><span class="dot unknown"></span> never probed</span>
+				// The dots are four words each; the columns above them are one
+				// word each and are the part nobody can guess. This link is the
+				// only route from the table to the sentence that says what
+				// Schema means, and it is written out rather than left to a
+				// title attribute, which a phone has no way to show.
+				<a class="item legend-more" href="#what-the-columns-mean">What Tools, Schema, JSON and Vision mean</a>
 			</div>
 			<div class="scroll">
 				<table>
@@ -253,10 +259,14 @@ templ board(rows []WorkingModel, query ShelfQuery) {
 							<th class="caret-col" scope="col"><span class="sr">Expand</span></th>
 							@sortableHeader(query, "model", "Model", false)
 							<th scope="col">Key</th>
-							<th class="cap" scope="col" title="The model called a function we offered, and we could dispatch it">Tools</th>
-							<th class="cap" scope="col" title="The reply parsed as JSON and matched a schema we sent">Schema</th>
-							<th class="cap" scope="col" title="The reply parsed as JSON in the provider's JSON mode">JSON</th>
-							<th class="cap" scope="col" title="It answered a question about an image we sent">Vision</th>
+							// Each heading is a link to the panel that defines it,
+							// so the definition is one tap away from the column
+							// rather than a hover a touchscreen cannot perform.
+							// The title attribute stays for the pointer that can.
+							@capabilityHeader(CapabilityTools, "The model called a function we offered, and we could dispatch it")
+							@capabilityHeader(CapabilityJSONSchema, "The reply parsed as JSON and matched a schema we sent")
+							@capabilityHeader(CapabilityJSONObject, "The reply parsed as JSON in the provider's JSON mode")
+							@capabilityHeader(CapabilityVision, "It answered a question about an image we sent")
 							@sortableHeader(query, "latency", "Latency", true)
 							@sortableHeader(query, "reliability", "Answered", false)
 							@sortableHeader(query, "verified", "Verified", true)
@@ -287,6 +297,16 @@ templ board(rows []WorkingModel, query ShelfQuery) {
 			}
 		</div>
 	</section>
+}
+
+// capabilityHeader is a feature column heading that says where its own
+// definition is. One word above a column of dots is not self-explanatory —
+// Handler asked what Schema meant, which means every visitor was asking it
+// silently — and a tooltip answers only the visitors holding a mouse.
+templ capabilityHeader(capability string, hint string) {
+	<th class="cap" scope="col">
+		<a class="cap-head" href="#what-the-columns-mean" title={ hint }>{ capabilityLabel(capability) }</a>
+	</th>
 }
 
 // sortableHeader makes a column heading a link that sorts by it. A link rather
@@ -495,7 +515,7 @@ templ homeFooter() {
 					<code>?key=none</code>, <code>?q=qwen</code>. Same ranking, same rows.
 				</p>
 				<p>Filters live in the URL, so a filtered shelf is a link you can send someone.</p>
-				@capabilityLegend()
+				@capabilityLegend(nil)
 				@siteFooter()
 			</div>
 		</div>
@@ -566,7 +586,10 @@ templ endpointCall(row ShelfRow, models []ModelRow) {
 	</section>
 }
 
-templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
+// evidence is the newest probe behind each feature verdict, which the raw log
+// below cannot be relied on to contain: it holds the last forty calls of any
+// kind, and on a busy endpoint every one of them is a chat call.
+templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow, evidence []ProbeRow) {
 	@masthead(nil)
 	<div class="sw">
 		<h1>{ row.Slug }</h1>
@@ -650,7 +673,8 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 			feature we could not get out of it, the cell says so — that disagreement is the
 			reason this shelf exists.
 		</p>
-		@capabilityLegend()
+		@capabilityLegend(capabilityEvidenceLinks(row.Slug, evidence))
+		@capabilityEvidence(evidence)
 		<h2>Raw probe log</h2>
 		<p class="muted measure">
 			Our working, so you can check it rather than trust it. Wider than the page at any width —
@@ -686,28 +710,95 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow) {
 //
 // Everything in it is a statement about what a call did, because that is the
 // only thing this site knows.
-templ capabilityLegend() {
-	<details class="legend-panel" id="what-the-columns-mean">
-		<summary>
+// capabilityEvidence is the working behind the feature columns: one row per
+// capability, holding the most recent call we made to decide it.
+//
+// It is separate from the raw log rather than a slice of it, because the log is
+// a window on time and this is a window on kinds. Chat probes run on every cycle
+// and feature probes do not, so the last forty rows of a busy endpoint can
+// contain no feature probe at all — and then the page a "no" in the Tools column
+// points at shows nothing that could justify it.
+//
+// Every row is anchored by its kind, which is what lets the legend link a
+// column's name straight to the call it was read from.
+templ capabilityEvidence(evidence []ProbeRow) {
+	<h2 id="the-call-behind-each-verdict">The call behind each verdict</h2>
+	if len(evidence) == 0 {
+		<p class="muted measure">
+			No feature probe has run against this endpoint yet, which is why its feature columns read
+			as never probed. That is a question nobody has asked, not a no.
+		</p>
+	} else {
+		<p class="muted measure">
+			One row per feature: the most recent call that decided that column, whatever it answered.
+			A refusal is the evidence behind a <b>no</b> exactly as a success is the evidence behind a
+			<b>yes</b>, so both are here.
+		</p>
+		<div class="scroll">
+			<table>
+				<thead>
+					<tr>
+						<th>Feature</th><th>When</th><th>Outcome</th><th>HTTP</th>
+						<th>Latency</th><th>Model</th><th>Detail</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, probe := range evidence {
+						<tr id={ capabilityAnchor(probe.Kind) }>
+							<td>{ capabilityLabel(probe.Kind) }</td>
+							<td class="when">{ humanWhen(probe.StartedAt) }</td>
+							<td><span class={ outcomeClass(probe.Outcome) }>{ probe.Outcome }</span></td>
+							<td>{ statusLabel(probe.HTTPStatus) }</td>
+							<td class="when">{ latency(probe.LatencyMS) }</td>
+							<td><code>{ orDash(probe.ModelUsed) }</code></td>
+							<td class="muted">{ truncate(probe.Error, 90) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// evidence maps a capability to the address of the call that decided it. On an
+// endpoint page every published verdict has one; on the shelf, where no single
+// endpoint is in scope, the map is empty and the panel says where to find them
+// instead of printing links that lead nowhere.
+//
+// The id sits on the summary rather than the details, so that following
+// #what-the-columns-mean from a column heading opens the panel: a fragment
+// inside a closed details is revealed by the browser, one naming the details
+// itself is not.
+templ capabilityLegend(evidence map[string]string) {
+	<details class="legend-panel">
+		<summary id="what-the-columns-mean">
 			What <strong>Tools</strong>, <strong>Schema</strong>, <strong>JSON</strong> and
 			<strong>Vision</strong> mean, and what each cell state means
 		</summary>
 		<div class="legend-body">
 			<h3>The columns</h3>
+			if len(evidence) > 0 {
+				<p class="muted">Each name links to the call this endpoint's verdict was read from.</p>
+			} else {
+				<p class="muted">
+					The call behind any one verdict is on that endpoint's own page — follow the provider
+					link in a row and read <b>The call behind each verdict</b>.
+				</p>
+			}
 			<dl>
-				<dt>Tools</dt>
+				@capabilityTerm(CapabilityTools, evidence)
 				<dd>
 					We sent a <code>tools</code> array and the model came back with a well-formed
 					<code>tool_calls</code> entry an agent could dispatch. A 200 with no tool call in it
 					is not tool support, and is recorded as a no.
 				</dd>
-				<dt>Schema</dt>
+				@capabilityTerm(CapabilityJSONSchema, evidence)
 				<dd>
 					The strict structured-output mode:
 					<code>response_format: {"{"}"type": "json_schema", …{"}"}</code>. The reply parsed and
 					matched the schema we sent.
 				</dd>
-				<dt>JSON</dt>
+				@capabilityTerm(CapabilityJSONObject, evidence)
 				<dd>
 					The weaker mode: <code>response_format: {"{"}"type": "json_object"{"}"}</code>. Valid
 					JSON, with no shape enforced. The two come apart in both directions — OVH's
@@ -715,12 +806,12 @@ templ capabilityLegend() {
 					the weak one; llm7's <code>meta-Llama-3.1-8B-Instruct-Turbo</code> does
 					<code>json_object</code> while <code>json_schema</code> answers 405.
 				</dd>
-				<dt>Vision</dt>
+				@capabilityTerm(CapabilityVision, evidence)
 				<dd>
 					A real image went in inline and a correct answer about it came back. We ask about
 					something only a model that looked could know.
 				</dd>
-				<dt>Draws</dt>
+				@capabilityTerm(CapabilityImageOut, evidence)
 				<dd>
 					On an endpoint's own page: bytes came back with an image content type, and they
 					really are an image. Not a 200 taken on trust.
@@ -729,7 +820,10 @@ templ capabilityLegend() {
 			<h3>The cell states</h3>
 			<dl>
 				<dt class="ok">yes</dt>
-				<dd>A real call proved it. Hover the dot, or read the endpoint page, for when.</dd>
+				<dd>
+					A real call proved it, at the time the endpoint page prints beside that call. The
+					dot's tooltip says the same thing where there is a pointer to hover with.
+				</dd>
 				<dt class="bad">no</dt>
 				<dd>A clean negative: the parameter was refused, or the answer did not conform.</dd>
 				<dt class="bad">no, claimed</dt>
@@ -745,8 +839,37 @@ templ capabilityLegend() {
 					feature probe. It is a question, never a no.
 				</dd>
 			</dl>
+			// The same four words are a filter, and the filter is the reason to
+			// read the columns at all: nobody wants to know which models do tool
+			// calling, they want the ones that do tool calling and hold a schema.
+			// The AND is the part a caller has to be told, because a comma reads
+			// as "any of these" in most APIs a developer has used this week.
+			<h3>The same columns, in the API</h3>
+			@copyable("this call", "curl '"+apiOrigin()+"/api/llm/up?feature=tools,json_schema'")
+			<p class="muted">
+				The names are the API's spelling of the columns: <code>tools</code>,
+				<code>json_schema</code>, <code>json_object</code>, <code>vision</code>,
+				<code>image_out</code>. Several are <b>and</b>, never or — a row comes back only if a real
+				call proved <em>every</em> feature named. Models we never probed for one of them are left
+				out rather than optimistically included, so a filtered shelf is shorter than a hopeful one.
+			</p>
 		</div>
 	</details>
+}
+
+// capabilityTerm is one capability name in the legend, linked to the call that
+// decided it where such a call is on the page being read.
+//
+// A name with no link is not a defect: an endpoint we have never probed for
+// vision has nothing to show, and a link to an empty anchor would be a worse
+// answer than plain text.
+templ capabilityTerm(capability string, evidence map[string]string) {
+	{{ href := evidence[capability] }}
+	if href != "" {
+		<dt><a href={ templ.SafeURL(href) }>{ capabilityLabel(capability) }</a></dt>
+	} else {
+		<dt>{ capabilityLabel(capability) }</dt>
+	}
 }
 
 templ StatsPage(report TrafficReport, dropped int64) {
@@ -1034,6 +1157,29 @@ func answeredHow(auth string) string {
 		return "on our key"
 	}
 	return "keyless"
+}
+
+// capabilityAnchor names the row on an endpoint page that holds the call behind
+// one capability's verdict. One function so the anchor written into the row and
+// the anchor written into the link cannot drift apart.
+func capabilityAnchor(capability string) string { return "probe-" + capability }
+
+// capabilityEvidenceLinks is the map the legend reads: capability to the address
+// of the call that decided it on this endpoint.
+//
+// Only capabilities with a probe get an entry. A name with no evidence stays
+// plain text in the legend rather than becoming a link to an anchor that is not
+// on the page — which is the same defect as a status with no timestamp, told in
+// HTML instead of prose.
+func capabilityEvidenceLinks(slug string, evidence []ProbeRow) map[string]string {
+	links := make(map[string]string, len(evidence))
+	for _, probe := range evidence {
+		if !KnownCapability(probe.Kind) {
+			continue
+		}
+		links[probe.Kind] = "/llm/" + slug + "#" + capabilityAnchor(probe.Kind)
+	}
+	return links
 }
 
 // capabilityLabel is the column heading for a capability. The names in the

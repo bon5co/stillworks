@@ -39,6 +39,7 @@
 		wireRunAPI();
 		wireTestCalls();
 		wireSearchShortcut();
+		wireFragmentReveal();
 	});
 
 	function ready(run) {
@@ -62,6 +63,47 @@
 		each(".stack", function (stack) {
 			stack.setAttribute("data-tabbed", "");
 		});
+	}
+
+	// ---------- fragment reveal ----------
+	// A column heading links to the panel that defines it. The panel is a
+	// <details>, and this browser does not open a closed one just because the
+	// address names something inside it -- so the link would scroll to a shut
+	// panel and look broken.
+	//
+	// Without this file the link still lands on the summary, which is a control
+	// the visitor can open; with it, the answer is already showing. That is the
+	// same bargain every other function here makes.
+	function wireFragmentReveal() {
+		revealFragment();
+		window.addEventListener("hashchange", revealFragment);
+	}
+
+	function revealFragment() {
+		if (!location.hash || location.hash.length < 2) {
+			return;
+		}
+		var target;
+		try {
+			target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+		} catch (error) {
+			return; // A hash somebody hand-edited into something undecodable.
+		}
+		if (!target) {
+			return;
+		}
+		var opened = false;
+		for (var node = target; node; node = node.parentElement) {
+			if (node.tagName === "DETAILS" && !node.open) {
+				node.open = true;
+				opened = true;
+			}
+		}
+		// Only after opening one: the scroll the browser already performed was
+		// measured against a page in which this panel was still collapsed.
+		if (opened && target.scrollIntoView) {
+			target.scrollIntoView();
+		}
 	}
 
 	function each(selector, run, root) {
