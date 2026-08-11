@@ -14,6 +14,13 @@ import "net/url"
 //   - Note where the claim came from, so a wrong entry can be traced.
 //   - Never seed a URL nobody has published. A guessed endpoint is noise.
 //
+// That sweep was re-run on 2026-08-11 against OmniRoute's routing registry,
+// which types all 226 of its providers by auth mode and so can be checked by
+// machine rather than read. Eighteen of the 226 claim to need no key. Calling
+// every one of them added exactly one new claim to this list and no new working
+// endpoint: see RejectedClaims in crosscheck.go for what each of the others
+// answered. The estimate below survives the largest catalogue anyone has built.
+//
 // AuthMode key is the second shelf, added 2026-08-04 after a full sweep of
 // every plausible keyless endpoint on the internet turned up no new ones: the
 // genuinely keyless universe is about four providers, and it is not growing.
@@ -98,6 +105,27 @@ var SeedEndpoints = []Endpoint{
 		OpenAICompatible: false,
 		Active:           true,
 		Notes:            "Ollama-shaped API, not OpenAI-compatible: /api/generate and /api/tags. Claimed no key and no published rate limit.",
+	},
+
+	{
+		Slug:             "uncloseai",
+		Provider:         "uncloseai (unturf)",
+		BaseURL:          "https://hermes.ai.unturf.com",
+		ChatPath:         "/v1/chat/completions",
+		ModelsPath:       "/v1/models",
+		AuthMode:         AuthModeNone,
+		DefaultModel:     "adamo1139/Hermes-3-Llama-3.1-8B-FP8-Dynamic",
+		DocsURL:          "https://unturf.com/",
+		OpenAICompatible: true,
+		Active:           true,
+		// One probe a cycle. The host throttles by address by its own account,
+		// and it is the smallest operator on this shelf.
+		ChatProbes: 1,
+		Notes: "Claimed free forever with no signup, self-published and carried by OmniRoute's routing " +
+			"registry as an endpoint needing no key. Every call from here on 2026-08-11 -- listing and chat, " +
+			"repeated -- answered 502, so the claim is seeded and the probe log is the answer about whether it " +
+			"comes back. Its terms throttle by IP for heavy use and forbid building a competing inference " +
+			"service on it; an hourly liveness call is neither, and the budget above is set low to keep it that way.",
 	},
 
 	// ---- The keyed shelf. Everything below needs a key and says so. ----

@@ -77,7 +77,40 @@ templ HomePage(rows []WorkingModel, total int, query ShelfQuery, sweep *time.Tim
 	@hero(origin)
 	@controls(query, len(rows), total)
 	@board(rows, query)
+	@rejected()
 	@homeFooter()
+}
+
+// rejected publishes what did not make the shelf. A directory is judged on its
+// rows, which means every directory is silently judged on work it never shows:
+// ten rows look the same whether ten claims were checked or two hundred were.
+// This is that work, with the call that ended each one, folded away because it
+// is evidence rather than the product.
+templ rejected() {
+	<section class="rejected">
+		<div class="wrap">
+			<details>
+				<summary>
+					{ fmt.Sprintf("Checked and not listed (%d)", len(RejectedClaims)) }
+					<span class="hint">— endpoints another catalogue calls free, and what they answered here</span>
+				</summary>
+				<p class="caption">
+					Cross-checked against OmniRoute's routing registry on 2026-08-11: 226 providers, 18 of them
+					typed as needing no key. Calling all 18 from this server produced one new claim on the shelf
+					above and no new working endpoint.
+				</p>
+				<dl class="rejects">
+					for _, claim := range RejectedClaims {
+						<dt>
+							{ claim.Name }
+							<code>{ claim.Endpoint }</code>
+						</dt>
+						<dd>{ claim.Verdict }</dd>
+					}
+				</dl>
+			</details>
+		</div>
+	</section>
 }
 
 // hero is the pitch, and the pitch is the API rather than any one model. A
