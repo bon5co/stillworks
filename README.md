@@ -112,6 +112,24 @@ Provider keys live in the environment and go out on probes only. They are never
 rendered, logged, written to the database, or returned by the API — there is a test that
 fails if one appears in a response.
 
+## What was checked and left off
+
+The shelf is short, and a short list is easy to mistake for a lazy one. So the rejects
+are published too, under the table and in `apps/audit/crosscheck.go`: what was called,
+and what it answered.
+
+The last sweep, on 2026-08-11, was against
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) — 226 providers in a routing
+registry that types each one by auth mode, which makes "needs no key" a claim you can
+check by machine instead of by reading marketing copy. Eighteen of the 226 are typed as
+keyless or optional. Calling all eighteen from this server produced **one** new claim on
+the shelf and **no** new working keyless endpoint.
+
+The recurring shape is worth knowing if you maintain a list like this: several of them
+answer `GET /v1/models` with a full catalogue and no credential, then answer the chat
+call with `401`. A keyless listing is not a keyless endpoint, and only the second call
+tells you which you have.
+
 ## Adding an endpoint
 
 Open a PR against `apps/audit/seed.go` with the base URL, the chat path, and whether it

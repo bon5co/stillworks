@@ -716,6 +716,33 @@ button.btn[aria-busy="true"] { color: var(--ink-3); cursor: progress; }
 .empty { padding: 40px 16px; text-align: center; color: var(--ink-3); font-size: 13.5px; }
 .empty b { color: var(--ink); }
 
+/* ---------- checked and not listed ---------- */
+.rejected { padding: 0 0 40px; }
+.rejected summary {
+	cursor: pointer;
+	font-size: 12.5px;
+	color: var(--ink-2);
+	padding: 9px 0;
+	border-top: 1px solid var(--line-soft);
+}
+.rejected summary:hover { color: var(--ink); }
+.rejected summary .hint { color: var(--ink-3); }
+.rejected details[open] summary { color: var(--ink); }
+
+.rejects { margin: 6px 0 0; max-width: 82ch; }
+.rejects dt {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--ink);
+	margin: 14px 0 3px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: baseline;
+}
+.rejects dt code { font-family: var(--mono); font-size: 11.5px; font-weight: 400; color: var(--ink-3); }
+.rejects dd { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+
 /* ---------- footer ---------- */
 .foot { border-top: 1px solid var(--line); background: var(--panel); }
 
