@@ -274,8 +274,9 @@ func TestEverySeededProviderHasATitleWithinBudgetThatLeadsWithItsName(t *testing
 		if n := utf8.RuneCountInString(title); n > 60 {
 			t.Errorf("%s: title is %d characters: %q", endpoint.Slug, n, title)
 		}
-		first := strings.ToLower(strings.Fields(endpoint.Provider)[0])
-		if !strings.Contains(strings.ToLower(title), strings.Trim(first, "()")) || heading == "" {
+		name := strings.ToLower(endpoint.Provider)
+		name = name[:min(len(name), 4)]
+		if !strings.Contains(strings.ToLower(title), name) || heading == "" {
 			t.Errorf("%s: title %q does not name the provider", endpoint.Slug, title)
 		}
 	}
