@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/bon5co/godjango/database"
@@ -16,6 +17,7 @@ const sponsorUsage = `usage:
   manage sponsor set  -provider NAME -pitch TEXT -url https://... -from YYYY-MM-DD -to YYYY-MM-DD
                       [-model ID] [-base-url https://...] [-endpoint SLUG]
   manage sponsor end                  end whoever holds the slot today (or delete one that has not started)
+  manage sponsor orders               every Polar subscription seen, with what became of it (rejected and blocked ones need a human)
   manage sponsor report               audience figures and click counts, humans and agents apart`
 
 // sponsorCommand is how the slot is changed without a deploy: whoever sells it
@@ -23,7 +25,7 @@ const sponsorUsage = `usage:
 func sponsorCommand(services management.ProjectServices) management.Command {
 	return management.Command{
 		Name:    "sponsor",
-		Summary: "Show, set, end or report on the sponsored slot (list|set|end|report)",
+		Summary: "Show, set, end or report on the sponsored slot (list|set|end|orders|report)",
 		Run: func(ctx context.Context, args []string, streams management.Streams) error {
 			if len(args) == 0 {
 				return fmt.Errorf("%s", sponsorUsage)
@@ -53,8 +55,12 @@ func runSponsor(ctx context.Context, db *database.DB, verb string, args []string
 			case dateOnly(s.EndsOn).Before(dateOnly(time.Now())):
 				state = "ended"
 			}
-			fmt.Fprintf(out, "#%d %-9s %s .. %s  %s  %s\n", s.ID, state,
-				s.StartsOn.Format("2006-01-02"), s.EndsOn.Format("2006-01-02"), s.Provider, s.URL)
+			paid := ""
+			if s.SubscriptionID != "" {
+				paid = "  polar:" + s.SubscriptionID
+			}
+			fmt.Fprintf(out, "#%d %-9s %s .. %s  %s  %s%s\n", s.ID, state,
+				s.StartsOn.Format("2006-01-02"), s.EndsOn.Format("2006-01-02"), s.Provider, s.URL, paid)
 		}
 		return nil
 	case "set":
@@ -87,6 +93,19 @@ func runSponsor(ctx context.Context, db *database.DB, verb string, args []string
 			return err
 		}
 		fmt.Fprintf(out, "sponsor #%d stored: %s, %s .. %s\n", stored.ID, stored.Provider, *from, *to)
+		return nil
+	case "orders":
+		var orders []sponsorOrder
+		if err := db.Bun().NewSelect().Model(&orders).Order("created_at DESC").Scan(ctx); err != nil {
+			return err
+		}
+		if len(orders) == 0 {
+			fmt.Fprintln(out, "no Polar orders seen")
+		}
+		for _, o := range orders {
+			fmt.Fprintf(out, "%-9s %s  polar:%-9s  %s  %s  %s\n", strings.ToUpper(o.Status), o.SubscriptionID, o.PolarStatus,
+				o.Provider, o.URL, o.Reason)
+		}
 		return nil
 	case "end":
 		changed, err := EndSponsorsOn(ctx, db, time.Now())
