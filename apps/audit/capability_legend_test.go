@@ -79,7 +79,7 @@ func TestALegendTermLinksToTheCallItsVerdictWasReadFrom(t *testing.T) {
 		{StartedAt: when, Kind: CapabilityTools, Outcome: OutcomeOK, HTTPStatus: 200, LatencyMS: 700, ModelUsed: "codestral-latest"},
 		{StartedAt: when, Kind: CapabilityJSONSchema, Outcome: OutcomeClientError, HTTPStatus: 405, LatencyMS: 120, ModelUsed: "codestral-latest", Error: "json_schema not supported"},
 	}
-	body := renderPage(t, EndpointPage(endpointRow(), nil, nil, evidence))
+	body := renderPage(t, EndpointPage(endpointRow(), nil, nil, evidence, "heading", TrackRecord{}))
 
 	for _, capability := range []string{CapabilityTools, CapabilityJSONSchema} {
 		if !strings.Contains(body, `href="/llm/llm7#probe-`+capability+`"`) {
@@ -119,7 +119,7 @@ func TestTheShelfLegendPrintsNoEvidenceLinkItCannotHonour(t *testing.T) {
 // An endpoint with no feature probe yet says so, rather than rendering a table
 // with no rows under a heading that promises evidence.
 func TestAnEndpointWithNoFeatureProbeSaysThatRatherThanShowingAnEmptyTable(t *testing.T) {
-	body := renderPage(t, EndpointPage(endpointRow(), nil, nil, nil))
+	body := renderPage(t, EndpointPage(endpointRow(), nil, nil, nil, "heading", TrackRecord{}))
 
 	if !strings.Contains(body, "No feature probe has run against this endpoint yet") {
 		t.Error("an endpoint with no feature evidence does not say so")
