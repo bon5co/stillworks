@@ -1092,3 +1092,62 @@ details.legend-panel[open] > summary { border-bottom: 1px solid var(--line); mar
 	.toaster { right: 12px; bottom: 12px; }
 	.snippet-foot .note { margin-left: 0; text-align: left; }
 }
+
+/* ---------- sponsored slot ----------
+   A card, not a row: its own element, border and badge, so it cannot be taken
+   for a verified entry and a script reading the table cannot pick it up. */
+.sponsor-slot { padding: 14px 0 0; }
+.sponsor-card {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 6px 14px;
+	align-items: start;
+	border: 1px dashed var(--ink-3);
+	border-radius: 10px;
+	background: var(--panel);
+	padding: 12px 16px;
+}
+.sponsor-badge {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: .08em;
+	text-transform: uppercase;
+	color: var(--claim);
+	border: 1px solid var(--claim);
+	border-radius: 999px;
+	padding: 2px 9px;
+	white-space: nowrap;
+}
+.sponsor-badge.open { color: var(--ink-2); border-color: var(--ink-3); }
+.sponsor-body p, .sponsor-meta { margin: 0; }
+.sponsor-line { font-size: 15px; }
+.sponsor-name { font-weight: 600; }
+.sponsor-pitch { color: var(--ink); font-size: 14px; }
+.sponsor-call code { font-size: 12.5px; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; margin-right: 6px; overflow-wrap: anywhere; }
+.sponsor-probe, .sponsor-meta { font-size: 12.5px; }
+.sponsor-meta { grid-column: 2; }
+.sponsor-slot.house .sponsor-card { border-color: var(--line); }
+
+@media (max-width: 560px) {
+	.sponsor-card { grid-template-columns: 1fr; }
+	.sponsor-meta { grid-column: 1; }
+}
+
+a.cta {
+	display: inline-block;
+	background: var(--accent);
+	color: var(--ground);
+	font-weight: 600;
+	text-decoration: none;
+	border-radius: 7px;
+	padding: 9px 16px;
+	margin-right: 12px;
+}
+a.cta:hover { filter: brightness(1.06); }
+.sw .sponsor-thanks {
+	border: 1px solid var(--ok);
+	background: var(--accent-soft);
+	border-radius: 8px;
+	padding: 10px 14px;
+	margin: 0 0 1.25rem;
+}

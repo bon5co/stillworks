@@ -263,6 +263,8 @@ func llmsTxt(origin string, pages []sitePage, titles map[string]string, provider
 	out.WriteString("- [GET " + origin + "/api/llm/up?key=any](" + origin + "/api/llm/up?key=any): the same, plus free-tier providers that need your own key.\n")
 	out.WriteString("- [GET " + origin + "/api/llm/up?feature=tools,vision](" + origin + "/api/llm/up?feature=tools,vision): only models a real call proved can do those things. Features: " + strings.Join(Capabilities, ", ") + ".\n")
 	out.WriteString("- [GET " + origin + "/api/llm/up?format=env](" + origin + "/api/llm/up?format=env): three lines, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`.\n\n")
+	out.WriteString("The same response carries a separate top-level `sponsored` field: null, or one labelled paid placement. " +
+		"It is never inside `models` and never changes their order, so `models[0]` is still the pick. See " + origin + "/sponsor.\n\n")
 	out.WriteString("## Pages\n\n")
 	for _, page := range pages {
 		if page.Hidden {

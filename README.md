@@ -68,6 +68,7 @@ missing from the sitemap, or listed and not served.
 | `/free-llm-api-no-key` | yes | Keyless providers with their 14-day track record. |
 | `/free-llm-api-resources-alternatives` | yes | What a static list cannot tell you, and what an hourly probe adds. |
 | `/docs` | yes | The `/api/llm/up` reference, with a live example row. |
+| `/sponsor` | yes | The sponsored slot: price, what it is and is not, audience figures read live. `/go/sponsor` (the tracked redirect) and `/api/sponsor` are `noindex`. |
 | `/llm/<slug>` | yes | One page per endpoint: a track-record section computed from the probe table, then the models and the raw probe log. |
 | `/stats`, `/mcp/`, 404 and error pages | no | `X-Robots-Tag: noindex, follow`. |
 | `/api/*` | no | `X-Robots-Tag: noindex`. A header, not a `Disallow`: a crawler forbidden to fetch a URL never reads it. |
@@ -86,6 +87,41 @@ When you add a page that is content, add its `pageDef` and its entry in
 `indexablePages()`. When you add an endpoint, its page and sitemap entry follow
 from the database, and its title falls back to `providerHead`'s template unless
 you give it a line there.
+
+## The sponsored field
+
+`/api/llm/up` also carries one top-level `sponsored` field: `null` when no sponsor holds
+the slot, an object when one does. It is paid placement and says so.
+
+```json
+"sponsored": {
+  "sponsored": true,
+  "label": "Sponsored",
+  "notice": "Paid placement. Not probed, not ranked, and not part of the models array: ...",
+  "provider": "Acme Inference",
+  "pitch": "Free-tier Llama and Qwen, no card.",
+  "url": "https://stillworks.supercapybara.com/go/sponsor?src=api",
+  "destination_host": "acme.example",
+  "model": "acme-8b",
+  "base_url": "https://api.acme.example/v1",
+  "starts_on": "2026-10-01",
+  "ends_on": "2026-10-31",
+  "probe": null
+}
+```
+
+- **It is never in `models` and never changes the ranking.** `models[0]` is still the pick and
+  the rest is still the fallback chain. A test holds the `models` array byte-identical with and
+  without a sponsor.
+- `probe` is the real probe row for the sponsor's endpoint when that endpoint is on the shelf,
+  shaped exactly like a `models` entry, and `null` when it is not. It is never synthesised.
+- `url` goes through our own `/go/sponsor` redirect so clicks can be counted; the destination
+  host is published beside it. `model` and `base_url` appear only when the sponsor supplied them.
+- Programs that only want the ranked list can ignore the field; nothing else in the response moved.
+
+The slot is sold on [/sponsor](https://stillworks.supercapybara.com/sponsor). The audience figures
+printed there (API calls, distinct API clients per day, Plausible-measured human visitors) are
+also at `GET /api/sponsor`.
 
 ## What "proved" means
 
@@ -139,6 +175,8 @@ Configuration is environment-only:
 | `PUBLIC_ORIGIN` | `scheme://host`, no trailing slash. Absolute URLs for social cards. |
 | `INTERNAL_NETWORKS` | Addresses excluded from the traffic counters, so our own checks are not counted as visitors. |
 | `PLAUSIBLE_HOST` | Optional. Analytics events are relayed server-side. |
+| `PLAUSIBLE_STATS_KEY` | Optional. A Plausible Stats API key, so `/sponsor` can print the 30-day human-visitor figure. Without it the figure shows as unavailable. |
+| `SPONSOR_CHECKOUT_URL` | Optional. Hosted checkout link for the monthly slot. Without it `/sponsor` offers email. |
 | `GROQ_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY` | Optional. Used only to probe the key-required shelf. |
 
 Provider keys live in the environment and go out on probes only. They are never
@@ -171,6 +209,25 @@ The recurring shape is worth knowing if you maintain a list like this: several o
 answer `GET /v1/models` with a full catalogue and no credential, then answer the chat
 call with `401`. A keyless listing is not a keyless endpoint, and only the second call
 tells you which you have.
+
+## The sponsored slot
+
+One paid placement: a labelled card above the shelf and a `sponsored` field in
+`/api/llm/up`. It lives in the `sponsors` table, so it changes without a deploy:
+
+```bash
+manage sponsor set -provider "Acme Inference" -pitch "Free-tier Llama, no card." \
+  -url "https://acme.example/signup?ref=stillworks" -from 2026-11-01 -to 2026-11-30 \
+  [-model acme-8b] [-base-url https://api.acme.example/v1] [-endpoint <slug on the shelf>]
+manage sponsor list      # ACTIVE / scheduled / ended
+manage sponsor end       # end whoever holds it today
+manage sponsor report    # API calls, client-days, clicks from the page vs from the API
+```
+
+The database refuses two sponsors whose dates overlap. With none active the card is a house
+ad that links to `/sponsor`. Clicks go through `/go/sponsor` and are stored in `traffic_events`
+as kind `sponsor`, with the source (`page` or `api`) in the path; crawlers and our own
+requests are excluded from every figure.
 
 ## Adding an endpoint
 

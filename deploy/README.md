@@ -116,6 +116,25 @@ comment at the top. Nothing in this repository generates that file. The
 newer per-site `pa-*.js` script, which needs an inline `<script>` this CSP
 forbids.
 
+## Optional: the sponsored slot
+
+`/sponsor` sells one sponsored slot (see the README). Two optional variables:
+
+| Variable               | What it is |
+| ---------------------- | ---------- |
+| `PLAUSIBLE_STATS_KEY`  | A Plausible Stats API key (Settings -> API keys, "Stats API"). With `PLAUSIBLE_HOST` and `PUBLIC_ORIGIN` set, `/sponsor` reads the 30-day human-visitor count live (cached 30 minutes; the last good value is kept for up to 24 hours if Plausible is down). Unset, the page prints the figure as unavailable -- not as zero. |
+| `SPONSOR_CHECKOUT_URL` | Hosted checkout link for the recurring monthly product (Polar checkout link, `https://...`). Unset, the call to action is an email to `contact@supercapybara.com`. |
+
+Neither is a secret you must keep out of a page: the checkout link is public by nature, and
+the stats key is read-only. Keep both in the Dokploy environment anyway, not in the repo.
+
+Setting or ending a sponsor needs no deploy; run the `manage sponsor` commands inside the
+app container (README, "The sponsored slot"):
+
+```bash
+docker exec <app container> ./manage sponsor set -provider ... -pitch ... -url https://... -from YYYY-MM-DD -to YYYY-MM-DD
+```
+
 ## Optional: the key-required shelf
 
 `/?key=key` publishes providers whose free tier needs an API key. We hold one

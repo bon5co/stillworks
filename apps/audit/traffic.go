@@ -259,11 +259,21 @@ func (r *Recorder) Track(kind string, next http.HandlerFunc) http.HandlerFunc {
 
 // Record queues one event. Safe to call from any goroutine and never blocks.
 func (r *Recorder) Record(request *http.Request, kind string, status int) {
+	r.RecordAs(request, kind, request.URL.Path, status)
+}
+
+// RecordAs queues one event under a path of the caller's choosing. The sponsor
+// redirect uses it to file a click under the place it came from. A nil recorder
+// counts nothing, like Track.
+func (r *Recorder) RecordAs(request *http.Request, kind, path string, status int) {
+	if r == nil {
+		return
+	}
 	userAgent := clip(request.UserAgent(), userAgentLimit)
 	event := TrafficEvent{
 		OccurredAt:   r.now().UTC(),
 		Kind:         kind,
-		Path:         request.URL.Path,
+		Path:         path,
 		Status:       status,
 		VisitorHash:  r.visitorHash(clientIP(request), userAgent),
 		ReferrerHost: referrerHost(request.Referer(), request.Host),

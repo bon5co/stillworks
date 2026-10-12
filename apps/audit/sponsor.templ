@@ -1,0 +1,179 @@
+package audit
+
+import "fmt"
+
+// sponsorCard is the slot on the shelf: one labelled card between the pitch and
+// the table, never a row inside it.
+//
+// It is a different element from a table row on purpose -- different tag,
+// different class, its own border and a badge reading "Sponsored" -- so it
+// cannot be mistaken for a verified entry, and so a script that reads the
+// shelf's rows cannot pick it up. With no sponsor the card is a house ad for
+// the slot itself.
+templ sponsorCard(slot SponsorSlot) {
+	if slot.Sponsor != nil {
+		<section class="sponsor-slot" aria-label="Sponsored">
+			<div class="wrap">
+				<div class="sponsor-card">
+					<span class="sponsor-badge">Sponsored</span>
+					<div class="sponsor-body">
+						<p class="sponsor-line">
+							<a
+								class="sponsor-name"
+								href={ sponsorClickHref() }
+								rel="sponsored noopener"
+							>{ slot.Sponsor.Provider }</a>
+							<span class="sponsor-host muted">{ " · " + sponsorHost(*slot.Sponsor) }</span>
+						</p>
+						<p class="sponsor-pitch">{ slot.Sponsor.Pitch }</p>
+						if slot.Sponsor.Model != "" || slot.Sponsor.BaseURL != "" {
+							<p class="sponsor-call muted">
+								if slot.Sponsor.Model != "" {
+									<code>{ slot.Sponsor.Model }</code>
+								}
+								if slot.Sponsor.BaseURL != "" {
+									<code>{ slot.Sponsor.BaseURL }</code>
+								}
+							</p>
+						}
+						<p class="sponsor-probe muted">
+							if slot.Probe != nil {
+								{ "Our own probe of this endpoint: answered " + slot.Probe.Answered() + " in the last week, " + latency(slot.Probe.LatencyMS) + ", last answered " + humanWhenPtr(slot.Probe.LastOK) + "." }
+							} else {
+								Not a verified row: we have no probe data for this provider, and the label is the only thing we are saying about it.
+							}
+						</p>
+					</div>
+					<p class="sponsor-meta muted">
+						Paid placement, outside the ranked list. <a href="/sponsor">Sponsor this slot</a>
+					</p>
+				</div>
+			</div>
+		</section>
+	} else {
+		<section class="sponsor-slot house" aria-label="Open sponsor slot">
+			<div class="wrap">
+				<div class="sponsor-card">
+					<span class="sponsor-badge open">Open slot</span>
+					<div class="sponsor-body">
+						<p class="sponsor-line">
+							<a class="sponsor-name" href="/sponsor">Sponsor this slot</a>
+						</p>
+						<p class="sponsor-pitch">
+							{ fmt.Sprintf("Your free tier, here and in every GET /api/llm/up response. $%d a month, flat. Labelled, never ranked, never in the models list.", SponsorPriceUSD) }
+						</p>
+					</div>
+				</div>
+			</div>
+		</section>
+	}
+}
+
+templ stat(number string, label string) {
+	<div class="stat">
+		<span class="stat-n">{ number }</span>
+		<span class="stat-l">{ label }</span>
+	</div>
+}
+
+// SponsorPage sells the slot. Every figure on it is read live; none is typed in.
+templ SponsorPage(audience SponsorAudience, slot SponsorSlot, checkout string, paid bool) {
+	@masthead(nil)
+	<div class="sw sponsor-page">
+		<h1>{ sponsorDef.Heading }</h1>
+		if paid {
+			<p class="sponsor-thanks" role="status">
+				Payment received, thank you. The details you gave at checkout go live within one working day.
+				Anything to add (a model, a base URL, a start date): <a href={ mailtoSponsor() }>{ SponsorContact }</a>.
+			</p>
+		}
+		<p class="tag">
+			{ fmt.Sprintf("One sponsor at a time, $%d a month, flat. Your provider shows on the page and in every runtime API response.", SponsorPriceUSD) }
+		</p>
+		<h2>What you get</h2>
+		<ul>
+			<li>
+				<b>A card above the shelf</b> on <a href="/">the home page</a>: your name, a 200-character
+				pitch, a link, and an optional model and base URL. It carries a "Sponsored" label and sits
+				outside the table.
+			</li>
+			<li>
+				<b>An entry in every API response.</b> <code>GET /api/llm/up</code> carries a separate
+				top-level <code>sponsored</code> field. Most of this site's readers are scripts and agents,
+				and they read that field.
+			</li>
+			<li>
+				<b>Real probe data, if your endpoint is on the shelf.</b> The card and the API entry show what
+				our own calls measured, failures included. We do not edit it.
+			</li>
+			<li><b>A click count.</b> Every link goes through <code>/go/sponsor</code>, so we can tell you how many followed it.</li>
+		</ul>
+		<h2>What it never does</h2>
+		<ul>
+			<li>It never appears in the <code>models</code> array and never changes its order. <code>models[0]</code> is still the best-ranked verified model and the rest is still the fallback chain.</li>
+			<li>It never affects a probe, a ranking or a verdict. Sponsors are not tested differently and cannot buy a green dot.</li>
+			<li>It is never unlabelled. The page says "Sponsored"; the API field says <code>"sponsored": true</code> and carries a notice in words.</li>
+		</ul>
+		<h2>Who sees it, last { fmt.Sprint(audience.Days) } days</h2>
+		<p class="muted">
+			This is a small audience and it is mostly programs. These figures are read from the live record when you
+			load this page.
+		</p>
+		<div class="stats">
+			@stat(fmt.Sprint(audience.APICalls), "API calls")
+			@stat(fmt.Sprint(audience.UpCalls), "of them GET /api/llm/up")
+			@stat(fmt.Sprintf("%.1f", audience.AvgDailyClients), "distinct API clients per day, average")
+			@stat(fmt.Sprint(audience.APIClientDays), "API client-days")
+			if audience.HumanVisitors != nil {
+				@stat(fmt.Sprint(*audience.HumanVisitors), "human visitors (Plausible)")
+			} else {
+				@stat("n/a", "human visitors (Plausible unreachable)")
+			}
+		</div>
+		<ul class="muted small">
+			<li>API figures exclude clients that identify as crawlers and our own requests. A client identifier rotates every UTC day by design, so "client-days" counts a program once for each day it called: three days of one program is three.</li>
+			if audience.HumanVisitors != nil {
+				<li>{ fmt.Sprintf("Human visitors come from Plausible, which filters known bots and uses no cookies, read %s. Most of them arrive directly, not from search.", humanWhenPtr(audience.HumanAsOf)) }</li>
+			} else {
+				<li>The human-visitor figure comes from Plausible and could not be read just now. It is shown as unavailable, not as zero.</li>
+			}
+			<li>
+				We do not quote the server's raw "sessions" count (the "visitors" figure on <a href="/stats">/stats</a>).
+				It is dominated by automated traffic with spoofed referrers, and a sponsor sold on it would be
+				buying an audience that is mostly not there.
+			</li>
+			<li>The same figures as JSON: <code>GET /api/sponsor</code>.</li>
+		</ul>
+		if slot.Sponsor != nil {
+			<h2>Right now</h2>
+			<p>
+				{ slot.Sponsor.Provider + " holds the slot until " + slot.Sponsor.EndsOn.Format("2 Jan 2006") + " (UTC). In the last " + fmt.Sprint(audience.Days) + " days its link was followed " + fmt.Sprint(audience.ClicksFromPage) + " time(s) from the page and " + fmt.Sprint(audience.ClicksFromAPI) + " time(s) from an API response." }
+				Booking opens after that date.
+			</p>
+		} else {
+			<h2>Right now</h2>
+			<p>The slot is open. It goes live within one working day of payment.</p>
+		}
+		<h2>Price and how to take it</h2>
+		<p>
+			<b>{ fmt.Sprintf("$%d per month", SponsorPriceUSD) }</b>, billed monthly, cancel any time (the slot runs to the end of the
+			month you paid for). One sponsor at a time.
+		</p>
+		<p>
+			if checkout != "" {
+				<a class="cta" href={ templ.SafeURL(checkout) } rel="noopener">{ fmt.Sprintf("Sponsor for $%d a month", SponsorPriceUSD) }</a>
+				<span class="muted small">Hosted checkout by Polar. It asks for your provider name, pitch and link.</span>
+			} else {
+				<a class="cta" href={ mailtoSponsor() }>{ "Email " + SponsorContact }</a>
+				<span class="muted small">No online checkout is set up on this deployment. Write to us and we will invoice you.</span>
+			}
+		</p>
+		<p class="muted small">
+			What we need: provider name, a pitch of up to 200 characters, and the link (an affiliate or tracking
+			link is fine; it must be https). Optional: a model and base URL, and a start date. Checkout collects
+			the first three; email the rest, or ask anything, at
+			<a href={ mailtoSponsor() }>{ SponsorContact }</a>.
+		</p>
+		@siteFooter()
+	</div>
+}

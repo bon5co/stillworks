@@ -40,6 +40,7 @@ func Commands(services management.ProjectServices) []management.Command {
 				})
 			},
 		},
+		sponsorCommand(services),
 		{
 			Name:    "probellm",
 			Summary: "Run one probe cycle over every active endpoint we can reach",

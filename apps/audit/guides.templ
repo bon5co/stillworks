@@ -330,6 +330,15 @@ templ DocsPage(def pageDef, example string, origin string) {
 				<pre><code>{ example }</code></pre>
 			</div>
 		</div>
+		<h2>The sponsored field</h2>
+		<p class="measure">
+			The response carries one more top-level key, <code>sponsored</code>: <code>null</code> when the slot is open,
+			otherwise a paid placement with <code>"sponsored": true</code>, a <code>label</code>, a <code>notice</code>, the
+			sponsor's <code>provider</code>, <code>pitch</code> and a tracked <code>url</code>, and a <code>probe</code> that
+			is our real probe row for the sponsor's endpoint when it is on the shelf and <code>null</code> when it is not.
+			It is never inside <code>models</code> and it never changes their order, so <code>models[0]</code> is still the pick.
+			Ignore the key if you only want the ranked list. <a href="/sponsor">Sponsor the slot</a>.
+		</p>
 		<h2>Errors and guarantees</h2>
 		<p class="measure">
 			An unknown <code>key</code> or <code>feature</code> answers <code>400</code>, with the valid values in the body.
