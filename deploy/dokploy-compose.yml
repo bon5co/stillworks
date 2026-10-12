@@ -36,6 +36,11 @@ services:
       # changes nothing else. Requires PUBLIC_ORIGIN: Plausible files an event
       # under the domain the event names. See deploy/README.md.
       PLAUSIBLE_HOST: ${PLAUSIBLE_HOST:-}
+      # /sponsor's human-visitor figure, read from Plausible's Stats API, and the
+      # hosted checkout for the sponsored slot. Both optional; unset means the
+      # page says the figure is unavailable / offers email. See deploy/README.md.
+      PLAUSIBLE_STATS_KEY: ${PLAUSIBLE_STATS_KEY:-}
+      SPONSOR_CHECKOUT_URL: ${SPONSOR_CHECKOUT_URL:-}
       # Free-tier keys for the key-required shelf. See README.md in this
       # directory for where each one comes from and what happens without it.
       #

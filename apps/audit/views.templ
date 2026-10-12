@@ -51,6 +51,7 @@ templ siteFooter() {
 		<a href="/llms.txt">llms.txt</a>
 		<a href="/mcp/">MCP servers (not open yet)</a>
 		<a href="/stats">our own traffic</a>
+		<a href="/sponsor">sponsor the slot</a>
 		<a href="/api/llm/up"><code>GET /api/llm/up</code></a>
 	</nav>
 }
@@ -77,8 +78,16 @@ templ copyable(label string, text string) {
 // visitor the ability to see that a faster endpoint existed one page over, and
 // cost the site a headline number that was true of anything.
 templ HomePage(rows []WorkingModel, total int, query ShelfQuery, sweep *time.Time, origin string) {
+	@HomePageWithSlot(rows, total, query, sweep, origin, SponsorSlot{})
+}
+
+// HomePageWithSlot is the home page with the sponsored slot's state supplied. A
+// zero SponsorSlot is the open slot, so HomePage -- which predates the slot and
+// is called by every test of the shelf -- keeps its signature.
+templ HomePageWithSlot(rows []WorkingModel, total int, query ShelfQuery, sweep *time.Time, origin string, slot SponsorSlot) {
 	@masthead(sweep)
 	@hero(origin)
+	@sponsorCard(slot)
 	@controls(query, len(rows), total)
 	@board(rows, query)
 	@rejected()

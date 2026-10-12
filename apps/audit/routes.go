@@ -107,9 +107,10 @@ func SocialCardPath() string { return socialCardPath }
 // long-lived database pool rather than only a router.
 func (a *App) RoutesWithServices(router chi.Router, services web.RuntimeServices) {
 	handlers := &handlers{
-		db:       services.Database,
-		recorder: a.recorder,
-		tries:    NewTryRunner(a.recorder),
+		db:        services.Database,
+		recorder:  a.recorder,
+		tries:     NewTryRunner(a.recorder),
+		plausible: sponsorPlausible,
 	}
 	track := a.recorder.Track
 
@@ -153,6 +154,13 @@ func (a *App) RoutesWithServices(router chi.Router, services web.RuntimeServices
 	router.Get(cardComparePath, serveCard(cardComparePNG, "card-compare.png"))
 	router.Get(cardDocsPath, serveCard(cardDocsPNG, "card-docs.png"))
 
+	// The sponsored slot. /go/sponsor is the first-party redirect every sponsor
+	// link goes through and records its own event, so it is not wrapped in
+	// track: wrapping it would count each click twice, once as a page.
+	router.Get(sponsorPagePath, track(KindPage, handlers.sponsorPage))
+	router.Get(sponsorClickPath, handlers.goSponsor)
+	router.Get("/api/sponsor", track(KindAPI, handlers.apiSponsor))
+
 	router.Get("/api/llm/up", track(KindAPI, handlers.apiUp))
 	router.Get("/api/llm/try", track(KindAPI, handlers.apiTryCall))
 	router.Get("/api/llm/{slug}", track(KindAPI, handlers.apiEndpoint))
@@ -168,6 +176,9 @@ type handlers struct {
 	db       *database.DB
 	recorder *Recorder
 	tries    *TryRunner
+	// plausible reads the human-visitor figure /sponsor prints. Nil when the
+	// deployment has no stats key, which the page says rather than hides.
+	plausible *PlausibleReader
 }
 
 // redirectToShelf answers one of the retired addresses. The filters travel: a
@@ -219,12 +230,13 @@ func (h *handlers) home(response http.ResponseWriter, request *http.Request) {
 		serverError(response, request, err)
 		return
 	}
+	slot := h.sponsorSlot(request.Context())
 	render(response, request, page{
 		Title:       homeDef.Title,
 		Description: homeDef.Description,
 		Canonical:   shelfPath,
 		Schema:      homeGraph(len(total)),
-	}, HomePage(rows, len(total), query, lastVerified(total), apiOrigin()))
+	}, HomePageWithSlot(rows, len(total), query, lastVerified(total), apiOrigin(), slot))
 }
 
 // apiOrigin is the address the page prints in every snippet it invites somebody
@@ -449,39 +461,12 @@ func (h *handlers) apiUp(response http.ResponseWriter, request *http.Request) {
 		writeEnv(response, working)
 		return
 	}
-	payload := map[string]any{
-		"generated_at": time.Now().UTC(),
-		"count":        len(working),
-		// The ordering, stated rather than left to be inferred from the array.
-		// models[0] is a recommendation and a caller walking the list down is
-		// the intended use, so what "down" means has to be on the payload --
-		// the page says the same sentence above the same rows.
-		"ranked_by": rankedBy(auth),
-		// Stated in the payload so a consumer cannot mistake this for a
-		// guarantee about somebody else's free service. The keyless wording is
-		// left exactly as it was: it is the payload a caller predating the
-		// second shelf receives, and it is the stronger of the two claims.
-		"disclaimer": disclaimerFor(auth),
-		"models":     working,
+	slot := h.sponsorSlot(request.Context())
+	var sponsored *SponsoredEntry
+	if slot.Sponsor != nil {
+		sponsored = NewSponsoredEntry(*slot.Sponsor, slot.Probe, apiOrigin())
 	}
-	if auth != AuthModeNone {
-		// Echoed back, and qualified. A caller that opted in has to be told what
-		// it opted into, on the envelope as well as on each row.
-		payload["key"] = auth
-		payload["auth"] = auth
-		payload["auth_disclaimer"] = keyNote + " Every entry carries auth: \"none\" needs no " +
-			"Authorization header at all, \"bearer\" needs one of your own. Requesting key=none, or " +
-			"omitting the parameter entirely, returns keyless entries only."
-	}
-	if len(features) > 0 {
-		// Echoed back so a caller can see its filter was understood rather than
-		// silently dropped. The key is absent when nothing was asked for, so
-		// the payload a caller predating the filter receives is unchanged.
-		payload["features"] = features
-		payload["feature_disclaimer"] = "A feature is listed only where a real call proved it: a tool call the " +
-			"caller could dispatch, a reply that parsed and matched the schema, an answer about an image we sent. " +
-			"Models whose features have never been probed are not returned by a filtered request."
-	}
+	payload := upPayload(working, auth, features, sponsored, time.Now().UTC())
 	writeJSON(response, http.StatusOK, payload)
 }
 

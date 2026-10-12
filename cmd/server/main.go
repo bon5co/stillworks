@@ -74,6 +74,12 @@ func main() {
 		exit(err)
 	}
 	audit.SetAnalyticsScript(analytics.ScriptPath())
+	// The sponsor page reads its human-visitor figure from Plausible's Stats
+	// API and links a hosted checkout. Both are optional: without them the page
+	// says the figure is unavailable and offers email instead.
+	audit.SetSponsorPlausible(
+		settings.PlausibleHost, settings.PublicOrigin, os.Getenv("PLAUSIBLE_STATS_KEY"))
+	audit.SetSponsorCheckoutURL(os.Getenv("SPONSOR_CHECKOUT_URL"))
 	configured, err := configuredproject.ConfigureWith(auditApp)
 	if err != nil {
 		exit(err)
