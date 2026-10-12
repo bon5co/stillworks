@@ -301,3 +301,19 @@ func (h *handlers) llms(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "public, max-age=3600")
 	_, _ = io.WriteString(response, llmsTxt(apiOrigin(), indexablePages(), pageTitles(), providers))
 }
+
+// Google Search Console proves ownership by fetching this file from the site
+// root. The token is published by Google for the property and verifies nothing
+// by itself, so it lives in the public source. The file must stay served after
+// verification succeeds or the property goes unverified again. It is a crawler
+// file, not a page: it is deliberately absent from sitePages and the sitemap.
+const (
+	searchConsoleVerificationPath = "/google29820619057a699c.html"
+	searchConsoleVerificationBody = "google-site-verification: google29820619057a699c.html"
+)
+
+func (h *handlers) searchConsoleVerification(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	response.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = io.WriteString(response, searchConsoleVerificationBody)
+}

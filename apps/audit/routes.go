@@ -148,6 +148,7 @@ func (a *App) RoutesWithServices(router chi.Router, services web.RuntimeServices
 	// Crawler files. Not counted: a robot fetching them is not a visit.
 	router.Get("/sitemap.xml", handlers.sitemap)
 	router.Get("/robots.txt", handlers.robots)
+	router.Get(searchConsoleVerificationPath, handlers.searchConsoleVerification)
 	router.Get("/llms.txt", handlers.llms)
 	router.Get(cardKeylessPath, serveCard(cardKeylessPNG, "card-keyless.png"))
 	router.Get(cardProviderPath, serveCard(cardProviderPNG, "card-provider.png"))
