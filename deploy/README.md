@@ -128,12 +128,19 @@ forbids.
 Neither is a secret you must keep out of a page: the checkout link is public by nature, and
 the stats key is read-only. Keep both in the Dokploy environment anyway, not in the repo.
 
-Setting or ending a sponsor needs no deploy; run the `manage sponsor` commands inside the
-app container (README, "The sponsored slot"):
+Setting or ending a sponsor needs no deploy. Run the `manage sponsor` commands inside the app
+container (README, "The sponsored slot"). With shell access to the host:
 
 ```bash
 docker exec <app container> ./manage sponsor set -provider ... -pitch ... -url https://... -from YYYY-MM-DD -to YYYY-MM-DD
 ```
+
+Without it, Dokploy can run a command in a service of the compose stack: create a compose
+schedule (`schedule.create`, `scheduleType: "compose"`, `serviceName: "app"`, a cron that never
+fires, `enabled: false`), set its `command` with `schedule.update`, run it with
+`schedule.runManually`, and read the output with `deployment.readLogs` on the returned
+`deploymentId`. Set `serviceName` to `stillworks-db` to run `psql` against the database instead.
+This is how the slot was verified live on release 0.13.0.
 
 ## Optional: the key-required shelf
 
