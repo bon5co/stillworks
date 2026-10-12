@@ -127,12 +127,13 @@ func indexablePages() []sitePage {
 		{Path: keylessDef.Path, Updated: keylessDef.Updated},
 		{Path: alternativesDef.Path, Updated: alternativesDef.Updated},
 		{Path: docsDef.Path, Updated: docsDef.Updated},
+		{Path: sponsorDef.Path, Updated: sponsorDef.Updated},
 	}
 }
 
 func pageTitles() map[string]string {
 	titles := map[string]string{}
-	for _, def := range []pageDef{homeDef, keylessDef, alternativesDef, docsDef} {
+	for _, def := range []pageDef{homeDef, keylessDef, alternativesDef, docsDef, sponsorDef} {
 		titles[def.Path] = def.Short
 	}
 	return titles

@@ -631,7 +631,7 @@ func DocsPage(def pageDef, example string, origin string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "</code></pre></div></div><h2>Errors and guarantees</h2><p class=\"measure\">An unknown <code>key</code> or <code>feature</code> answers <code>400</code>, with the valid values in the body. An unknown endpoint slug answers <code>404</code>. There is no guarantee: these are other people's free services, and an endpoint can add a key requirement or vanish between two probes. The payload says so in <code>disclaimer</code>, on every call.</p><p><a href=\"/free-llm-api-no-key\">Free LLM APIs with no key</a> · <a href=\"/\">The shelf</a> · <a href=\"/llms.txt\">llms.txt</a></p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 51, "</code></pre></div></div><h2>The sponsored field</h2><p class=\"measure\">The response carries one more top-level key, <code>sponsored</code>: <code>null</code> when the slot is open, otherwise a paid placement with <code>\"sponsored\": true</code>, a <code>label</code>, a <code>notice</code>, the sponsor's <code>provider</code>, <code>pitch</code> and a tracked <code>url</code>, and a <code>probe</code> that is our real probe row for the sponsor's endpoint when it is on the shelf and <code>null</code> when it is not. It is never inside <code>models</code> and it never changes their order, so <code>models[0]</code> is still the pick. Ignore the key if you only want the ranked list. <a href=\"/sponsor\">Sponsor the slot</a>.</p><h2>Errors and guarantees</h2><p class=\"measure\">An unknown <code>key</code> or <code>feature</code> answers <code>400</code>, with the valid values in the body. An unknown endpoint slug answers <code>404</code>. There is no guarantee: these are other people's free services, and an endpoint can add a key requirement or vanish between two probes. The payload says so in <code>disclaimer</code>, on every call.</p><p><a href=\"/free-llm-api-no-key\">Free LLM APIs with no key</a> · <a href=\"/\">The shelf</a> · <a href=\"/llms.txt\">llms.txt</a></p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -679,7 +679,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 		var templ_7745c5c3_Var32 string
 		templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs("Track record: " + row.Provider)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 355, Col: 39}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 364, Col: 39}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 		if templ_7745c5c3_Err != nil {
@@ -692,7 +692,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 		var templ_7745c5c3_Var33 string
 		templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(track.Sentence())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 356, Col: 39}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 365, Col: 39}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 		if templ_7745c5c3_Err != nil {
@@ -711,7 +711,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 				var templ_7745c5c3_Var34 string
 				templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(sentence)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 359, Col: 39}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 368, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 				if templ_7745c5c3_Err != nil {
@@ -734,7 +734,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 				var templ_7745c5c3_Var35 string
 				templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(accepted)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 362, Col: 33}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 371, Col: 33}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 				if templ_7745c5c3_Err != nil {
@@ -752,7 +752,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 			var templ_7745c5c3_Var36 string
 			templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("Median reply %d ms, 95th percentile %d ms, over the calls that answered. ", track.MedianMS, track.P95MS))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 365, Col: 123}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 374, Col: 123}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 			if templ_7745c5c3_Err != nil {
@@ -766,7 +766,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 				var templ_7745c5c3_Var37 string
 				templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs("We have been calling this endpoint since " + track.Since.UTC().Format("2 January 2006") + ". ")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 367, Col: 102}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 376, Col: 102}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 				if templ_7745c5c3_Err != nil {
@@ -781,7 +781,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 				var templ_7745c5c3_Var38 string
 				templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs("Measured with our own free-tier key from this server's address: it says the endpoint answered our account, not what a new signup receives.")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 370, Col: 147}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 379, Col: 147}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 				if templ_7745c5c3_Err != nil {
@@ -791,7 +791,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 				var templ_7745c5c3_Var39 string
 				templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs("Measured with no Authorization header, from this server's address.")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 372, Col: 75}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 381, Col: 75}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 				if templ_7745c5c3_Err != nil {
@@ -810,7 +810,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 				var templ_7745c5c3_Var40 string
 				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(day.Date.Format("2 Jan"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 381, Col: 51}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 390, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 				if templ_7745c5c3_Err != nil {
@@ -823,7 +823,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 				var templ_7745c5c3_Var41 string
 				templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprint(day.Attempts))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 382, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 391, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 				if templ_7745c5c3_Err != nil {
@@ -837,7 +837,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 					var templ_7745c5c3_Var42 string
 					templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs("not probed")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 385, Col: 24}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 394, Col: 24}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 					if templ_7745c5c3_Err != nil {
@@ -847,7 +847,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 					var templ_7745c5c3_Var43 string
 					templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d of %d", day.Answered, day.Attempts))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 387, Col: 63}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 396, Col: 63}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 					if templ_7745c5c3_Err != nil {
@@ -861,7 +861,7 @@ func trackRecordSection(row ShelfRow, track TrackRecord) templ.Component {
 				var templ_7745c5c3_Var44 string
 				templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(latency(day.MedianMS))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 390, Col: 48}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 399, Col: 48}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 				if templ_7745c5c3_Err != nil {
@@ -916,7 +916,7 @@ func homeFAQ(total int) templ.Component {
 		var templ_7745c5c3_Var46 string
 		templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs(countOf(total, "model"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 416, Col: 86}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `apps/audit/guides.templ`, Line: 425, Col: 86}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 		if templ_7745c5c3_Err != nil {

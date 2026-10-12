@@ -80,7 +80,7 @@ templ stat(number string, label string) {
 templ SponsorPage(audience SponsorAudience, slot SponsorSlot, checkout string, paid bool) {
 	@masthead(nil)
 	<div class="sw sponsor-page">
-		<h1>Sponsor the slot</h1>
+		<h1>{ sponsorDef.Heading }</h1>
 		if paid {
 			<p class="sponsor-thanks" role="status">
 				Payment received, thank you. The details you gave at checkout go live within one working day.

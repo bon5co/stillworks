@@ -68,6 +68,7 @@ missing from the sitemap, or listed and not served.
 | `/free-llm-api-no-key` | yes | Keyless providers with their 14-day track record. |
 | `/free-llm-api-resources-alternatives` | yes | What a static list cannot tell you, and what an hourly probe adds. |
 | `/docs` | yes | The `/api/llm/up` reference, with a live example row. |
+| `/sponsor` | yes | The sponsored slot: price, what it is and is not, audience figures read live. `/go/sponsor` (the tracked redirect) and `/api/sponsor` are `noindex`. |
 | `/llm/<slug>` | yes | One page per endpoint: a track-record section computed from the probe table, then the models and the raw probe log. |
 | `/stats`, `/mcp/`, 404 and error pages | no | `X-Robots-Tag: noindex, follow`. |
 | `/api/*` | no | `X-Robots-Tag: noindex`. A header, not a `Disallow`: a crawler forbidden to fetch a URL never reads it. |

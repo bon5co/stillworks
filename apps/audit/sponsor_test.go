@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unicode/utf8"
 )
 
 func shelfFixture() []WorkingModel {
@@ -298,12 +297,6 @@ func TestSponsorPageHasHonestFiguresAndNoSessions(t *testing.T) {
 	}
 	if !strings.Contains(unreachable, "mailto:contact@supercapybara.com") {
 		t.Error("with no checkout configured the call to action is email")
-	}
-}
-
-func TestSponsorPageTitleFitsASearchResult(t *testing.T) {
-	if n := utf8.RuneCountInString(sponsorPageTitle()); n > 60 {
-		t.Fatalf("title is %d characters, want 60 or fewer: %q", n, sponsorPageTitle())
 	}
 }
 

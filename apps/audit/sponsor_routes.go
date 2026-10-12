@@ -66,10 +66,19 @@ func (h *handlers) sponsorPage(response http.ResponseWriter, request *http.Reque
 	}
 	slot := h.sponsorSlot(request.Context())
 	render(response, request, page{
-		Title: sponsorPageTitle(),
-		Description: "One sponsored slot on a live-probed free LLM registry: on the page and in every " +
-			"/api/llm/up response. Flat monthly price, honest audience figures read live.",
-		Canonical: sponsorPagePath,
+		Title:       sponsorDef.Title,
+		Description: sponsorDef.Description,
+		Canonical:   sponsorDef.Path,
+		Schema: append(websiteNodes(),
+			map[string]any{
+				"@type":        "WebPage",
+				"@id":          absolute(sponsorDef.Path) + "#page",
+				"url":          absolute(sponsorDef.Path),
+				"name":         sponsorDef.Heading,
+				"isPartOf":     map[string]any{"@id": absolute("/#site")},
+				"dateModified": sponsorDef.Updated.Format("2006-01-02"),
+			},
+			breadcrumb([2]string{"stillworks", "/"}, [2]string{sponsorDef.Short, sponsorDef.Path})),
 	}, SponsorPage(audience, slot, sponsorCheckoutURL, request.URL.Query().Get("paid") == "1"))
 }
 
@@ -115,7 +124,17 @@ func mailtoSponsor() templ.SafeURL {
 		strings.ReplaceAll("stillworks sponsor slot", " ", "%20"))
 }
 
-// sponsorPageTitle stays under 60 characters, the limit a search result shows.
-func sponsorPageTitle() string {
-	return fmt.Sprintf("Sponsor stillworks — one slot, $%d/month", SponsorPriceUSD)
+// sponsorDef is the /sponsor page's head and its place in the sitemap and
+// llms.txt. It follows the site's page conventions: a title of 60 characters or
+// fewer with the primary keyword in it, a description of 155 or fewer, and a
+// self-canonical, all asserted by seo_test.go.
+var sponsorDef = pageDef{
+	Path:    sponsorPagePath,
+	Title:   fmt.Sprintf("Sponsor a Free LLM API List: One Slot, $%d/Month", SponsorPriceUSD),
+	Heading: "Sponsor the free LLM API list",
+	Description: fmt.Sprintf("One sponsored slot on a live-tested free LLM API list: a labelled card and a field in every "+
+		"/api/llm/up response. $%d a month, audience figures shown live.", SponsorPriceUSD),
+	Short:     "Sponsor the slot",
+	Updated:   day(2026, time.October, 12),
+	Published: day(2026, time.October, 12),
 }
