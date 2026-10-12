@@ -140,6 +140,18 @@ func (a *App) RoutesWithServices(router chi.Router, services web.RuntimeServices
 	router.Get(strings.TrimSuffix(keyedShelfPath, "/"), track(KindPage, redirectToShelf(AuthModeKey)))
 	router.Get("/llm/{slug}", track(KindPage, handlers.endpoint))
 	router.Get("/mcp/", track(KindPage, handlers.mcp))
+	router.Get(keylessDef.Path, track(KindPage, handlers.keylessPage))
+	router.Get(alternativesDef.Path, track(KindPage, handlers.alternativesPage))
+	router.Get(docsDef.Path, track(KindPage, handlers.docsPage))
+
+	// Crawler files. Not counted: a robot fetching them is not a visit.
+	router.Get("/sitemap.xml", handlers.sitemap)
+	router.Get("/robots.txt", handlers.robots)
+	router.Get("/llms.txt", handlers.llms)
+	router.Get(cardKeylessPath, serveCard(cardKeylessPNG, "card-keyless.png"))
+	router.Get(cardProviderPath, serveCard(cardProviderPNG, "card-provider.png"))
+	router.Get(cardComparePath, serveCard(cardComparePNG, "card-compare.png"))
+	router.Get(cardDocsPath, serveCard(cardDocsPNG, "card-docs.png"))
 
 	router.Get("/api/llm/up", track(KindAPI, handlers.apiUp))
 	router.Get("/api/llm/try", track(KindAPI, handlers.apiTryCall))
@@ -208,10 +220,10 @@ func (h *handlers) home(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	render(response, request, page{
-		Title: "stillworks — directories list, we check",
-		Description: "Free LLM endpoints re-probed by real calls and published with the time each one " +
-			"was measured, keyless first. Ask the API what is answering right now. Nothing here says \"up\".",
-		Canonical: shelfPath,
+		Title:       homeDef.Title,
+		Description: homeDef.Description,
+		Canonical:   shelfPath,
+		Schema:      homeGraph(len(total)),
 	}, HomePage(rows, len(total), query, lastVerified(total), apiOrigin()))
 }
 
@@ -311,8 +323,10 @@ func (h *handlers) endpoint(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	if !found {
+		// Before WriteHeader: headers set after it are never sent.
+		response.Header().Set("X-Robots-Tag", "noindex, follow")
 		response.WriteHeader(http.StatusNotFound)
-		render(response, request, page{Title: "Not found — stillworks"},
+		render(response, request, page{Title: "Not found — stillworks", NoIndex: true},
 			NotFoundPage(fmt.Sprintf("No endpoint called %q is tracked here.", slug)))
 		return
 	}
@@ -333,20 +347,64 @@ func (h *handlers) endpoint(response http.ResponseWriter, request *http.Request)
 		serverError(response, request, err)
 		return
 	}
+	track, err := EndpointTrackRecord(request.Context(), h.db, slug)
+	if err != nil {
+		serverError(response, request, err)
+		return
+	}
+	title, heading := providerHead(row)
+	description := providerDescription(row, track)
+	path := providerPath(slug)
+	trail := "free LLM API, no key"
+	trailPath := keylessPagePath
+	if row.RequiresKey() {
+		trail, trailPath = "free-tier endpoints", "/"
+	}
+	graph := append(websiteNodes(),
+		map[string]any{
+			"@type":        "WebPage",
+			"@id":          absolute(path) + "#page",
+			"url":          absolute(path),
+			"name":         heading,
+			"description":  description,
+			"isPartOf":     map[string]any{"@id": absolute("/#site")},
+			"dateModified": time.Now().UTC().Format("2006-01-02"),
+			"about": map[string]any{
+				"@type": "Service",
+				"name":  row.Provider,
+				"url":   row.DocsURL,
+			},
+			"mainEntity": map[string]any{
+				"@type":                "Dataset",
+				"name":                 row.Provider + " probe results",
+				"description":          track.Sentence(),
+				"creator":              map[string]any{"@id": absolute("/#org")},
+				"isAccessibleForFree":  true,
+				"measurementTechnique": "An HTTP chat completion request from the stillworks server, repeated hourly.",
+				"distribution": []any{map[string]any{
+					"@type":          "DataDownload",
+					"encodingFormat": "application/json",
+					"contentUrl":     absolute("/api/llm/" + slug),
+				}},
+			},
+		},
+		breadcrumb([2]string{"stillworks", "/"}, [2]string{trail, trailPath}, [2]string{slug, path}),
+	)
 	render(response, request, page{
-		Title: slug + " — stillworks",
-		Description: fmt.Sprintf(
-			"%s: the base URL, a working call, every model we have checked and the raw probe log behind each verdict.",
-			row.Provider),
-		Canonical: "/llm/" + slug,
-	}, EndpointPage(row, models, probes, evidence))
+		Title:       title,
+		Description: description,
+		Canonical:   path,
+		Card:        cardProviderPath,
+		CardAlt:     "stillworks: Free tier, measured. Uptime, refusals, latency and models per provider.",
+		Schema:      graph,
+	}, EndpointPage(row, models, probes, evidence, heading, track))
 }
 
 func (h *handlers) mcp(response http.ResponseWriter, request *http.Request) {
 	render(response, request, page{
 		Title:       "MCP servers — stillworks",
 		Description: "The MCP shelf is not open yet. The LLM shelf ships first and has to earn its keep.",
-		Canonical:   "/mcp/",
+		NoIndex:     true,
 	}, ComingSoonPage())
 }
 
@@ -479,7 +537,7 @@ func (h *handlers) stats(response http.ResponseWriter, request *http.Request) {
 		Title: "Traffic — stillworks",
 		Description: "This site's own numbers, published to the standard it asks of everybody else: " +
 			"what was counted, what was excluded, and what was lost.",
-		Canonical: "/stats",
+		NoIndex: true,
 	}, StatsPage(report, h.recorder.Dropped()))
 }
 
@@ -654,6 +712,9 @@ func writeJSON(response http.ResponseWriter, status int, payload any) {
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
 	// Agents are the intended caller and they run everywhere.
 	response.Header().Set("Access-Control-Allow-Origin", "*")
+	// Data, not a page: kept out of results by header, and not by robots.txt,
+	// which would stop a crawler from ever reading this line.
+	response.Header().Set("X-Robots-Tag", "noindex")
 	response.Header().Set("Cache-Control", "no-store")
 	response.WriteHeader(status)
 	encoder := json.NewEncoder(response)
@@ -710,6 +771,20 @@ type page struct {
 	// parameters that produce a hundred spellings of the same shelf. Naming the
 	// request's own URL instead would ask a crawler to index every one of them.
 	Canonical string
+	// Card is the content-hashed path of this page's link-preview image, and
+	// CardAlt its description. Empty means the site-wide card.
+	Card    string
+	CardAlt string
+	// Article marks a page as og:type article rather than website.
+	Article bool
+	// NoIndex asks search engines to keep the page out of results. It is sent
+	// as an X-Robots-Tag header, because the framework's head has no robots
+	// tag and a header is read by every crawler before it reads a byte of body.
+	NoIndex bool
+	// Schema is the JSON-LD graph for what the page is. Written into the body,
+	// not the head: a type=application/ld+json block is data, not a script, so
+	// default-src 'self' does not touch it, and crawlers read it anywhere.
+	Schema []any
 }
 
 // publicOrigin is the scheme and host this deployment is reached under, for
@@ -815,12 +890,24 @@ func render(response http.ResponseWriter, request *http.Request, meta page, cont
 	// this site exists to complain about.
 	if publicOrigin != "" && meta.Canonical != "" && meta.Description != "" {
 		options.Meta.Canonical = meta.Canonical
+		card, alt := socialCardPath, defaultCardAlt
+		if meta.Card != "" {
+			card, alt = meta.Card, meta.CardAlt
+		}
 		options.Meta.Social = view.Social{
-			Image: socialCardPath,
-			ImageAlt: "stillworks: a row of sample squares, most of them verified green, " +
-				"one refused, over the words \"directories list, we check\".",
+			Image:    card,
+			ImageAlt: alt,
 			SiteName: "stillworks",
 		}
+		if meta.Article {
+			options.Meta.Social.Type = "article"
+		}
+	}
+	if meta.NoIndex {
+		response.Header().Set("X-Robots-Tag", "noindex, follow")
+	}
+	if publicOrigin != "" && len(meta.Schema) > 0 {
+		options.Content = withSchema(meta.Schema, content)
 	}
 	if err := view.Render(response, request, options); err != nil {
 		// Never silently. The render fails before writing anything, so swallowing
@@ -834,6 +921,7 @@ func render(response http.ResponseWriter, request *http.Request, meta page, cont
 }
 
 func serverError(response http.ResponseWriter, request *http.Request, err error) {
+	response.Header().Set("X-Robots-Tag", "noindex, follow")
 	response.WriteHeader(http.StatusInternalServerError)
-	render(response, request, page{Title: "Error — stillworks"}, NotFoundPage(err.Error()))
+	render(response, request, page{Title: "Error — stillworks", NoIndex: true}, NotFoundPage(err.Error()))
 }

@@ -45,6 +45,10 @@ templ masthead(sweep *time.Time) {
 templ siteFooter() {
 	<nav class="site-foot muted" aria-label="Elsewhere on this site">
 		<a href="/">the shelf</a>
+		<a href="/free-llm-api-no-key">free LLM API, no key</a>
+		<a href="/free-llm-api-resources-alternatives">free-LLM list alternatives</a>
+		<a href="/docs">API reference</a>
+		<a href="/llms.txt">llms.txt</a>
 		<a href="/mcp/">MCP servers (not open yet)</a>
 		<a href="/stats">our own traffic</a>
 		<a href="/api/llm/up"><code>GET /api/llm/up</code></a>
@@ -78,6 +82,7 @@ templ HomePage(rows []WorkingModel, total int, query ShelfQuery, sweep *time.Tim
 	@controls(query, len(rows), total)
 	@board(rows, query)
 	@rejected()
+	@homeFAQ(total)
 	@homeFooter()
 }
 
@@ -120,7 +125,7 @@ templ hero(origin string) {
 			<div class="pitch">
 				<p class="eyebrow">One call, then you are calling an LLM</p>
 				<h1>
-					Ask us what is answering right now. The reply carries everything the <em>next</em> call needs.
+					{ homeDef.Heading }. Ask what is answering <em>right now</em>.
 				</h1>
 				<p class="sub">
 					Base URL, model ID, whether a key is needed, what a real probe proved. Ranked, so
@@ -620,10 +625,19 @@ templ endpointCall(row ShelfRow, models []ModelRow) {
 // evidence is the newest probe behind each feature verdict, which the raw log
 // below cannot be relied on to contain: it holds the last forty calls of any
 // kind, and on a busy endpoint every one of them is a chat call.
-templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow, evidence []ProbeRow) {
+templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow, evidence []ProbeRow, heading string, track TrackRecord) {
 	@masthead(nil)
 	<div class="sw">
-		<h1>{ row.Slug }</h1>
+		<nav class="muted small" aria-label="Breadcrumb">
+			<a href="/">stillworks</a> /
+			if row.RequiresKey() {
+				<a href="/">free-tier endpoints</a>
+			} else {
+				<a href="/free-llm-api-no-key">free LLM API, no key</a>
+			}
+			/ { row.Slug }
+		</nav>
+		<h1>{ heading }</h1>
 		<p class="tag">
 			{ row.Provider }
 			if row.DocsURL != "" {
@@ -634,6 +648,7 @@ templ EndpointPage(row ShelfRow, models []ModelRow, probes []ProbeRow, evidence 
 		// block and no button anywhere on it -- and printed the bare host as the
 		// base URL, which for this provider answers 404 to every call.
 		@endpointCall(row, models)
+		@trackRecordSection(row, track)
 		if row.RequiresKey() {
 			<p class="warn">
 				This provider requires an API key. Every row below was measured with stillworks' own
