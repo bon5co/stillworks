@@ -264,3 +264,19 @@ func TestTrackDaysBeforeWatchingBeganAreDropped(t *testing.T) {
 		t.Fatalf("got %d day rows, want 3 (the day before the first probe dropped, a later empty day kept)", len(record.Days))
 	}
 }
+
+// The real seed rows, not a stand-in name: a long provider name is what pushes
+// a fallback title past the budget.
+func TestEverySeededProviderHasATitleWithinBudgetThatLeadsWithItsName(t *testing.T) {
+	for _, endpoint := range SeedEndpoints {
+		row := ShelfRow{Slug: endpoint.Slug, Provider: endpoint.Provider, AuthMode: endpoint.AuthMode}
+		title, heading := providerHead(row)
+		if n := utf8.RuneCountInString(title); n > 60 {
+			t.Errorf("%s: title is %d characters: %q", endpoint.Slug, n, title)
+		}
+		first := strings.ToLower(strings.Fields(endpoint.Provider)[0])
+		if !strings.Contains(strings.ToLower(title), strings.Trim(first, "()")) || heading == "" {
+			t.Errorf("%s: title %q does not name the provider", endpoint.Slug, title)
+		}
+	}
+}
