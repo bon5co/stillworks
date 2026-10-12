@@ -118,12 +118,21 @@ The shelf is short, and a short list is easy to mistake for a lazy one. So the r
 are published too, under the table and in `apps/audit/crosscheck.go`: what was called,
 and what it answered.
 
-The last sweep, on 2026-08-11, was against
-[OmniRoute](https://github.com/diegosouzapw/OmniRoute) — 226 providers in a routing
-registry that types each one by auth mode, which makes "needs no key" a claim you can
-check by machine instead of by reading marketing copy. Eighteen of the 226 are typed as
-keyless or optional. Calling all eighteen from this server produced **one** new claim on
-the shelf and **no** new working keyless endpoint.
+Two sweeps so far, both against
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) — a routing registry that types
+every provider by auth mode, which makes "needs no key" a claim you can check by machine
+instead of by reading marketing copy.
+
+- **2026-08-11:** 226 providers, 18 typed keyless or optional. Calling all 18 from this
+  server produced one new claim on the shelf and no new working keyless endpoint.
+- **2026-10-12:** 270 providers (58 new directories, 11 gone), 17 typed keyless or
+  optional. Also called: the two that ship a public placeholder key, the thirteen the
+  registry's free-tier list tags keyless, and one anonymous chat call to each of the 52
+  entries added since August. Result: **two** new working keyless endpoints, Kilo Gateway
+  and Free.ai, now on the shelf. Everything else failed the chat call and is listed under
+  the table with what it answered. Forty-two further providers publish a recurring free tier
+  but need a signup; they are not listed here because the key-required shelf only carries
+  providers we hold a key for.
 
 The recurring shape is worth knowing if you maintain a list like this: several of them
 answer `GET /v1/models` with a full catalogue and no credential, then answer the chat

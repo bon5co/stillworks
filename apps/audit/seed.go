@@ -19,7 +19,14 @@ import "net/url"
 // machine rather than read. Eighteen of the 226 claim to need no key. Calling
 // every one of them added exactly one new claim to this list and no new working
 // endpoint: see RejectedClaims in crosscheck.go for what each of the others
-// answered. The estimate below survives the largest catalogue anyone has built.
+// answered.
+//
+// It was re-run on 2026-10-12 against the registry as it then stood: 270
+// providers, seventeen typed keyless or optional, plus the ones that ship a
+// public placeholder key or are labelled keyless in its free-tier catalogue.
+// That sweep did find two working keyless endpoints, kilo-gateway and free-ai
+// below, so the estimate that follows -- about four providers, not growing --
+// was two too low on that date. Everything else it probed was rejected.
 //
 // AuthMode key is the second shelf, added 2026-08-04 after a full sweep of
 // every plausible keyless endpoint on the internet turned up no new ones: the
@@ -126,6 +133,54 @@ var SeedEndpoints = []Endpoint{
 			"repeated -- answered 502, so the claim is seeded and the probe log is the answer about whether it " +
 			"comes back. Its terms throttle by IP for heavy use and forbid building a competing inference " +
 			"service on it; an hourly liveness call is neither, and the budget above is set low to keep it that way.",
+	},
+
+	{
+		Slug:             "kilo-gateway",
+		Provider:         "Kilo Gateway",
+		BaseURL:          "https://api.kilo.ai",
+		ChatPath:         "/api/gateway/chat/completions",
+		ModelsPath:       "/api/gateway/models",
+		AuthMode:         AuthModeNone,
+		DefaultModel:     "kilo-auto/free",
+		DocsURL:          "https://kilo.ai/",
+		OpenAICompatible: true,
+		Active:           true,
+		// 390 models are listed and 18 of them cost nothing. Every paid one
+		// answers 401 at once, which is cheap to learn but takes many cycles at
+		// the default share, so this row takes a larger one.
+		ChatProbes: 6,
+		Notes: "Found 2026-10-12 in OmniRoute's registry (typed authType optional) and verified keyless by a " +
+			"chat call with no Authorization header: kilo-auto/free answered 200, routed to a free-tier " +
+			"Nvidia model. The listing is the whole gateway catalogue, 390 models of which 18 are priced at " +
+			"zero; every paid model answers 401 PAID_MODEL_AUTH_REQUIRED without a key, so only the free " +
+			"ones can reach the shelf. The free models are shared upstream pools and answer 429 under load. " +
+			"Its preflight sends no Access-Control-Allow-Origin, so the test-call button uses the server " +
+			"route for this row.",
+	},
+	{
+		Slug:             "free-ai",
+		Provider:         "Free.ai",
+		BaseURL:          "https://api.free.ai",
+		ChatPath:         "/v1/chat/completions",
+		ModelsPath:       "/v1/models",
+		AuthMode:         AuthModeNone,
+		DefaultModel:     "qwen7b",
+		DocsURL:          "https://free.ai/api/",
+		OpenAICompatible: true,
+		Active:           true,
+		// The default share. The listing carries 463 chat models, but the paid
+		// proxies among them publish input modalities and no output ones, so
+		// they are not read as chat-capable and only the ~30 self-hosted models
+		// are probed. Those sit on someone's GPUs and answer 503 when busy, so
+		// they are not worth more than the default.
+		Notes: "Found 2026-10-12 in OmniRoute's registry. Its own API page tells you to sign up for a key, " +
+			"yet a chat call with no Authorization header answered 200 on qwen7b (Qwen3-30B-A3B-Instruct): " +
+			"its self-hosted models are free and anonymous in practice, and the paid proxies in the same " +
+			"listing are not. The provider does not document that, so the probe log is the only authority " +
+			"on whether it holds. The other self-hosted chat models answered 503 \"busy with other " +
+			"requests\" on repeated calls the same day, which is a concurrency limit and not a refusal. " +
+			"Its preflight allows browser calls from this origin.",
 	},
 
 	// ---- The keyed shelf. Everything below needs a key and says so. ----
