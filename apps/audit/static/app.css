@@ -103,6 +103,12 @@ main#main {
 a { color: var(--accent); }
 code, kbd, pre { font-family: var(--mono); }
 
+/* A long address or identifier in running text has no space to break at, so
+   without this it sets the width of the whole page on a phone: one 450px URL in
+   a <code> was enough to make the home page scroll sideways. <pre> is not
+   affected -- it does not wrap, and scrolls inside its own box. */
+code { overflow-wrap: anywhere; }
+
 .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px; }
 
 .sr {
@@ -126,7 +132,7 @@ code, kbd, pre { font-family: var(--mono); }
    line below, so a longer sentence never shoves the clock onto a line of its
    own. */
 .masthead .wrap { padding-top: 16px; padding-bottom: 16px; }
-.topline { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 7px; }
+.topline { display: flex; align-items: center; justify-content: space-between; gap: 6px 14px; flex-wrap: wrap; margin-bottom: 7px; }
 
 .mark {
 	font-family: var(--mono);
@@ -226,7 +232,7 @@ code, kbd, pre { font-family: var(--mono); }
 .step-2 .stack { flex: 1 1 0; }
 
 @media (max-width: 900px) {
-	.steps { grid-template-columns: 1fr; }
+	.steps { grid-template-columns: minmax(0, 1fr); }
 	.step-2 .stack { flex: none; }
 	.step:not(.step-2) .snippet > .stack { flex: none; }
 }
@@ -300,10 +306,10 @@ code, kbd, pre { font-family: var(--mono); }
    the card is always as tall as its longest snippet, and switching languages
    moves nothing else on the page. */
 .stack { display: block; min-height: 0; }
-.stack > .pane { display: flex; flex-direction: column; min-height: 0; }
+.stack > .pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .stack > .pane > pre { flex: 1; min-height: 0; overflow: auto; }
 
-.stack[data-tabbed] { display: grid; }
+.stack[data-tabbed] { display: grid; grid-template-columns: minmax(0, 1fr); }
 .stack[data-tabbed] > .pane { grid-area: 1 / 1; visibility: hidden; }
 .stack[data-tabbed] > .pane[data-active] { visibility: visible; }
 
@@ -553,9 +559,23 @@ button.btn[aria-busy="true"] { color: var(--ink-3); cursor: progress; }
 
 .board .scroll {
 	overflow-x: auto;
+	/* Also the containing block for the visually-hidden .sr spans inside the
+	   table: an absolutely positioned box is clipped only by an ancestor that
+	   contains it, and without this one every .sr sat at its static position, far
+	   right of the page, and made the whole document scroll sideways. */
+	position: relative;
 	border: 1px solid var(--line);
 	border-radius: 10px;
-	background: var(--panel);
+	/* Edge shadows appear only on a side that has more table beyond it (`local`
+	   backgrounds travel with the content, `scroll` ones stay), so a table cut off
+	   by a phone screen reads as scrollable, not as finished. */
+	background:
+		linear-gradient(to right, var(--panel) 30%, rgba(0, 0, 0, 0)) left center / 2.5rem 100% no-repeat,
+		linear-gradient(to left, var(--panel) 30%, rgba(0, 0, 0, 0)) right center / 2.5rem 100% no-repeat,
+		radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, .28), rgba(0, 0, 0, 0)) left center / .9rem 100% no-repeat,
+		radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, .28), rgba(0, 0, 0, 0)) right center / .9rem 100% no-repeat,
+		var(--panel);
+	background-attachment: local, local, scroll, scroll, scroll;
 	box-shadow: var(--shadow);
 }
 
@@ -1044,6 +1064,7 @@ details.legend-panel[open] > summary { border-bottom: 1px solid var(--line); mar
    while `scroll` ones stay put. */
 .sw .scroll {
 	overflow-x: auto;
+	position: relative;
 	background:
 		linear-gradient(to right, var(--ground) 30%, rgba(0, 0, 0, 0)) left center / 2.5rem 100% no-repeat,
 		linear-gradient(to left, var(--ground) 30%, rgba(0, 0, 0, 0)) right center / 2.5rem 100% no-repeat,
