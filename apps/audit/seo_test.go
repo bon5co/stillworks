@@ -321,3 +321,21 @@ func TestModelsAnsweringNeverPrintsMoreAnsweringThanListed(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchConsoleVerificationFileIsServedAtRootAndKeptOutOfTheSitemap(t *testing.T) {
+	router := chi.NewRouter()
+	New().RoutesWithServices(router, web.RuntimeServices{})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, searchConsoleVerificationPath, nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	if got := response.Body.String(); got != "google-site-verification: google29820619057a699c.html" {
+		t.Errorf("body = %q", got)
+	}
+	for _, entry := range indexablePages() {
+		if entry.Path == searchConsoleVerificationPath {
+			t.Errorf("%s must not be in the sitemap", entry.Path)
+		}
+	}
+}
