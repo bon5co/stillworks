@@ -128,6 +128,24 @@ forbids.
 Neither is a secret you must keep out of a page: the checkout link is public by nature, and
 the stats key is read-only. Keep both in the Dokploy environment anyway, not in the repo.
 
+### Purchases fulfil themselves: `POLAR_WEBHOOK_SECRET`
+
+| Variable                   | What it is |
+| -------------------------- | ---------- |
+| `POLAR_WEBHOOK_SECRET`     | Signing secret of the Polar webhook endpoint for `https://<origin>/api/polar/webhook` (Polar -> Settings -> Webhooks, or `POST /v1/webhooks/endpoints`). A **secret**: keep it in the Dokploy environment only. Unset, the endpoint answers `503` to every request. |
+| `POLAR_SPONSOR_PRODUCT_ID` | Optional. Product sold as the slot. Defaults to the live "stillworks sponsor slot". The endpoint receives every product in the organisation and ignores the others. |
+
+Subscribe the endpoint to `subscription.created`, `.active`, `.updated`, `.canceled`, `.uncanceled`,
+`.cycled`, `.revoked` and `.past_due`. Format `raw`. The checkout must collect the custom fields
+`sponsor_provider`, `sponsor_pitch` and `sponsor_url`. Rotating the secret: reset it in Polar,
+update the variable, redeploy; a delivery made in between is retried by Polar.
+
+An order whose fields fail validation, or whose dates another sponsor holds, is **not published**:
+the house ad keeps showing, the row in `sponsor_orders` keeps what was submitted and why it was
+refused (`manage sponsor orders`), and the container log carries an `ERROR` line containing
+`SPONSOR ORDER REJECTED` or `SPONSOR ORDER BLOCKED`. Polar itself emails the organisation on
+each new subscription, so the sale is never silent.
+
 Setting or ending a sponsor needs no deploy. Run the `manage sponsor` commands inside the app
 container (README, "The sponsored slot"). With shell access to the host:
 

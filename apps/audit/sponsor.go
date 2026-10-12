@@ -62,16 +62,19 @@ const sponsorNotice = "Paid placement. Not probed, not ranked, and not part of t
 type Sponsor struct {
 	bun.BaseModel `bun:"table:sponsors,alias:sp"`
 
-	ID           int64     `bun:"id,pk,autoincrement"`
-	Provider     string    `bun:"provider,notnull"`
-	Pitch        string    `bun:"pitch,notnull"`
-	URL          string    `bun:"url,notnull"`
-	Model        string    `bun:"model,notnull"`
-	BaseURL      string    `bun:"base_url,notnull"`
-	EndpointSlug string    `bun:"endpoint_slug,notnull"`
-	StartsOn     time.Time `bun:"starts_on,notnull,type:date"`
-	EndsOn       time.Time `bun:"ends_on,notnull,type:date"`
-	CreatedAt    time.Time `bun:"created_at,nullzero,notnull,default:now()"`
+	ID           int64  `bun:"id,pk,autoincrement"`
+	Provider     string `bun:"provider,notnull"`
+	Pitch        string `bun:"pitch,notnull"`
+	URL          string `bun:"url,notnull"`
+	Model        string `bun:"model,notnull"`
+	BaseURL      string `bun:"base_url,notnull"`
+	EndpointSlug string `bun:"endpoint_slug,notnull"`
+	// SubscriptionID is the Polar subscription that paid for this slot, empty for a
+	// sponsor set by hand. It is how a renewal or a cancellation finds its row.
+	SubscriptionID string    `bun:"subscription_id,nullzero"`
+	StartsOn       time.Time `bun:"starts_on,notnull,type:date"`
+	EndsOn         time.Time `bun:"ends_on,notnull,type:date"`
+	CreatedAt      time.Time `bun:"created_at,nullzero,notnull,default:now()"`
 }
 
 // Field limits, mirrored in the migration's CHECK constraints. They are
@@ -169,12 +172,7 @@ func ListSponsors(ctx context.Context, db *database.DB) ([]Sponsor, error) {
 // InsertSponsor validates and stores a sponsor. An overlap with an existing one
 // is refused by the database's exclusion constraint and reported in words.
 func InsertSponsor(ctx context.Context, db *database.DB, s Sponsor) (Sponsor, error) {
-	s.Provider = strings.TrimSpace(s.Provider)
-	s.Pitch = strings.TrimSpace(s.Pitch)
-	s.URL = strings.TrimSpace(s.URL)
-	s.BaseURL = strings.TrimSpace(s.BaseURL)
-	s.Model = strings.TrimSpace(s.Model)
-	s.EndpointSlug = strings.TrimSpace(s.EndpointSlug)
+	s = s.Normalised()
 	if err := s.Validate(); err != nil {
 		return s, err
 	}
@@ -305,4 +303,17 @@ func LoadSponsorSlot(ctx context.Context, db *database.DB, day time.Time) (Spons
 		slot.Probe = ProbeFor(*sponsor, shelf)
 	}
 	return slot, nil
+}
+
+// Normalised trims every text field. Both ways a sponsor arrives -- the
+// management command and the purchase webhook -- go through it and then through
+// Validate, so a slot can never be published under rules one of them skipped.
+func (s Sponsor) Normalised() Sponsor {
+	s.Provider = strings.TrimSpace(s.Provider)
+	s.Pitch = strings.TrimSpace(s.Pitch)
+	s.URL = strings.TrimSpace(s.URL)
+	s.BaseURL = strings.TrimSpace(s.BaseURL)
+	s.Model = strings.TrimSpace(s.Model)
+	s.EndpointSlug = strings.TrimSpace(s.EndpointSlug)
+	return s
 }

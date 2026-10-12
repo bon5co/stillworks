@@ -177,6 +177,8 @@ Configuration is environment-only:
 | `PLAUSIBLE_HOST` | Optional. Analytics events are relayed server-side. |
 | `PLAUSIBLE_STATS_KEY` | Optional. A Plausible Stats API key, so `/sponsor` can print the 30-day human-visitor figure. Without it the figure shows as unavailable. |
 | `SPONSOR_CHECKOUT_URL` | Optional. Hosted checkout link for the monthly slot. Without it `/sponsor` offers email. |
+| `POLAR_WEBHOOK_SECRET` | Optional. The Polar webhook signing secret (`whsec_...`). Set, purchases of the sponsor product fill the slot by themselves; unset, `POST /api/polar/webhook` answers `503` to everything. |
+| `POLAR_SPONSOR_PRODUCT_ID` | Optional. The Polar product id sold as the slot; defaults to the live product. Events for any other product are acknowledged and ignored. |
 | `GROQ_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY` | Optional. Used only to probe the key-required shelf. |
 
 Provider keys live in the environment and go out on probes only. They are never
@@ -221,6 +223,7 @@ manage sponsor set -provider "Acme Inference" -pitch "Free-tier Llama, no card."
   [-model acme-8b] [-base-url https://api.acme.example/v1] [-endpoint <slug on the shelf>]
 manage sponsor list      # ACTIVE / scheduled / ended
 manage sponsor end       # end whoever holds it today
+manage sponsor orders    # every Polar subscription seen, and what became of it
 manage sponsor report    # API calls, client-days, clicks from the page vs from the API
 ```
 
@@ -228,6 +231,21 @@ The database refuses two sponsors whose dates overlap. With none active the card
 ad that links to `/sponsor`. Clicks go through `/go/sponsor` and are stored in `traffic_events`
 as kind `sponsor`, with the source (`page` or `api`) in the path; crawlers and our own
 requests are excluded from every figure.
+
+### Purchases fulfil themselves
+
+Buying the monthly product posts Polar subscription events to `POST /api/polar/webhook`
+(Standard Webhooks signature, five-minute timestamp window, each delivery id applied once).
+The slot follows the subscription, keyed on its id:
+
+- active: the checkout's three custom fields (provider, pitch, link) go through the same
+  validation as `manage sponsor set`; the slot runs from today to the current period end.
+- renewal: the end date moves out to the new period end, never back.
+- cancelled: nothing changes, the sponsor keeps the days already paid for; revoked: the slot
+  ends at once.
+- fields that fail validation, or dates another sponsor holds: nothing is published, the house
+  ad keeps showing, the order is stored in `sponsor_orders` with the reason, and the log says
+  a human must follow up. `manage sponsor orders` lists them.
 
 ## Adding an endpoint
 
