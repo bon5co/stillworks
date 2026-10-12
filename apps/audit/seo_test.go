@@ -281,3 +281,32 @@ func TestEverySeededProviderHasATitleWithinBudgetThatLeadsWithItsName(t *testing
 		}
 	}
 }
+
+// Groq lists models it refuses with a 404 for this key, and those calls are
+// 40% of the attempts. Charging the provider for them as downtime printed 58%
+// uptime for an endpoint that answered 99% of what it accepted. The two figures
+// are kept apart.
+func TestRefusalsForAModelAreNotCountedAsTheProviderBeingDown(t *testing.T) {
+	median := 219.0
+	record := assembleTrackRecord([]trackAggregate{{
+		Attempts: 1014, Answered: 589, ClientError: 422, ServerError: 3, MedianMS: &median,
+	}}, nil)
+	if record.Other != 0 || record.Accepted() != 592 {
+		t.Fatalf("other=%d accepted=%d, want 0 and 592", record.Other, record.Accepted())
+	}
+	if got := record.AcceptedSentence(); !strings.Contains(got, "589 answered (99%)") || !strings.Contains(got, "not the provider being down") {
+		t.Errorf("accepted sentence = %q", got)
+	}
+	if got := record.RefusalSentence(); !strings.Contains(got, "422 refused for the one model asked about") {
+		t.Errorf("refusal sentence = %q", got)
+	}
+	row := ShelfRow{Provider: "Groq", AuthMode: AuthModeKey, ModelsListed: 46, WorkingModels: 40}
+	description := providerDescription(row, record)
+	if !strings.Contains(description, "99% of the calls it accepted") || utf8.RuneCountInString(description) > 155 {
+		t.Errorf("description = %q (%d)", description, utf8.RuneCountInString(description))
+	}
+	clean := assembleTrackRecord([]trackAggregate{{Attempts: 10, Answered: 10, MedianMS: &median}}, nil)
+	if clean.AcceptedSentence() != "" {
+		t.Errorf("a clean record needs no accepted sentence: %q", clean.AcceptedSentence())
+	}
+}

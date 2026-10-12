@@ -358,6 +358,9 @@ templ trackRecordSection(row ShelfRow, track TrackRecord) {
 			if sentence := track.RefusalSentence(); sentence != "" {
 				<p class="muted measure">{ sentence }</p>
 			}
+			if accepted := track.AcceptedSentence(); accepted != "" {
+				<p class="measure">{ accepted }</p>
+			}
 			<p class="muted measure">
 				{ fmt.Sprintf("Median reply %d ms, 95th percentile %d ms, over the calls that answered. ", track.MedianMS, track.P95MS) }
 				if track.Since != nil {
