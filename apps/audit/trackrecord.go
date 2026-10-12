@@ -30,6 +30,12 @@ type TrackRecord struct {
 	// choosing a provider: one is a rate limit, the other a spent budget.
 	RateLimited int
 	NeedsKey    int
+	// ClientError counts calls the provider refused for the model asked about
+	// (an HTTP 4xx other than a rate limit or a key demand): the model is in
+	// its listing and not available to this call. That is a fact about one
+	// model, not about whether the provider is up, and it is kept apart so the
+	// uptime figure does not charge a provider for models it lists and refuses.
+	ClientError int
 	ServerError int
 	Unreachable int
 	Other       int
@@ -77,6 +83,23 @@ func (t TrackRecord) Sentence() string {
 		t.Answered, t.Attempts, countOf(t.WindowDays, "day"), t.Rate(), t.MedianMS)
 }
 
+// Accepted is the chat calls the provider took as a valid request for a model
+// it offers this caller: everything except a refusal for a missing key or for
+// the one model asked about. Whether those answered is the closest this table
+// has to uptime, and it is printed beside the plain fraction, never instead of
+// it.
+func (t TrackRecord) Accepted() int { return t.Attempts - t.NeedsKey - t.ClientError }
+
+// AcceptedSentence is empty when it would say nothing the plain sentence does
+// not, that is when no call was refused for a model or a key.
+func (t TrackRecord) AcceptedSentence() string {
+	if t.Accepted() <= 0 || t.Accepted() == t.Attempts {
+		return ""
+	}
+	return fmt.Sprintf("Counting only the %d calls the provider accepted for a model it offers us, %d answered (%.0f%%): the rest of the gap is models that are listed and refused, not the provider being down.",
+		t.Accepted(), t.Answered, 100*float64(t.Answered)/float64(t.Accepted()))
+}
+
 // RefusalSentence names what the refusals were, most specific first, or is
 // empty when nothing was refused.
 func (t TrackRecord) RefusalSentence() string {
@@ -88,6 +111,7 @@ func (t TrackRecord) RefusalSentence() string {
 	}
 	add(t.RateLimited, "rate-limited (HTTP 429 or the provider's own limit message)")
 	add(t.NeedsKey, "refused for a missing or rejected key (401, 402 or 403)")
+	add(t.ClientError, "refused for the one model asked about (HTTP 4xx: listed by the provider, missing or not on this tier)")
 	add(t.ServerError, "server errors (5xx)")
 	add(t.Unreachable, "timeouts or connection failures")
 	add(t.Other, "other")
@@ -102,6 +126,7 @@ type trackAggregate struct {
 	Answered    int        `bun:"answered"`
 	RateLimited int        `bun:"rate_limited"`
 	NeedsKey    int        `bun:"needs_key"`
+	ClientError int        `bun:"client_error"`
 	ServerError int        `bun:"server_error"`
 	Unreachable int        `bun:"unreachable"`
 	MedianMS    *float64   `bun:"median_ms"`
@@ -124,6 +149,7 @@ func EndpointTrackRecord(ctx context.Context, db *database.DB, slug string) (Tra
 		       count(*) FILTER (WHERE p.started_at > now() - make_interval(days => ?) AND p.outcome = 'ok') AS answered,
 		       count(*) FILTER (WHERE p.started_at > now() - make_interval(days => ?) AND p.outcome = 'rate_limited') AS rate_limited,
 		       count(*) FILTER (WHERE p.started_at > now() - make_interval(days => ?) AND p.outcome = 'needs_key') AS needs_key,
+		       count(*) FILTER (WHERE p.started_at > now() - make_interval(days => ?) AND p.outcome = 'client_error') AS client_error,
 		       count(*) FILTER (WHERE p.started_at > now() - make_interval(days => ?) AND p.outcome = 'server_error') AS server_error,
 		       count(*) FILTER (WHERE p.started_at > now() - make_interval(days => ?) AND p.outcome IN ('timeout','unreachable')) AS unreachable,
 		       percentile_cont(0.5) WITHIN GROUP (ORDER BY p.latency_ms)
@@ -135,7 +161,7 @@ func EndpointTrackRecord(ctx context.Context, db *database.DB, slug string) (Tra
 		JOIN llm_endpoints e ON e.id = p.endpoint_id
 		WHERE e.slug = ? AND p.kind = 'chat'
 	`, TrackWindowDays, TrackWindowDays, TrackWindowDays, TrackWindowDays, TrackWindowDays,
-		TrackWindowDays, TrackWindowDays, TrackWindowDays, slug).Scan(ctx, &aggregate)
+		TrackWindowDays, TrackWindowDays, TrackWindowDays, TrackWindowDays, slug).Scan(ctx, &aggregate)
 	if err != nil {
 		return TrackRecord{}, err
 	}
@@ -171,8 +197,9 @@ func assembleTrackRecord(aggregate []trackAggregate, days []trackDayRow) TrackRe
 		a := aggregate[0]
 		record.Attempts, record.Answered = a.Attempts, a.Answered
 		record.RateLimited, record.NeedsKey = a.RateLimited, a.NeedsKey
+		record.ClientError = a.ClientError
 		record.ServerError, record.Unreachable = a.ServerError, a.Unreachable
-		record.Other = max(0, a.Attempts-a.Answered-a.RateLimited-a.NeedsKey-a.ServerError-a.Unreachable)
+		record.Other = max(0, a.Attempts-a.Answered-a.RateLimited-a.NeedsKey-a.ClientError-a.ServerError-a.Unreachable)
 		if a.MedianMS != nil {
 			record.MedianMS = int(*a.MedianMS + 0.5)
 		}
