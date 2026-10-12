@@ -54,7 +54,7 @@ templ KeylessPage(def pageDef, entries []keylessEntry, working []WorkingModel, s
 									<span class="muted small"> (Ollama-shaped, not OpenAI-compatible)</span>
 								}
 							</td>
-							<td>{ fmt.Sprintf("%d of %d listed", entry.Row.WorkingModels, entry.Row.ModelsListed) }</td>
+							<td>{ modelsAnswering(entry.Row.WorkingModels, entry.Row.ModelsListed) + " answering" }</td>
 							<td>
 								if entry.Track.Attempts > 0 {
 									{ fmt.Sprintf("%d of %d (%.0f%%)", entry.Track.Answered, entry.Track.Attempts, entry.Track.Rate()) }

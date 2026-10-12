@@ -310,3 +310,14 @@ func TestRefusalsForAModelAreNotCountedAsTheProviderBeingDown(t *testing.T) {
 		t.Errorf("a clean record needs no accepted sentence: %q", clean.AcceptedSentence())
 	}
 }
+
+func TestModelsAnsweringNeverPrintsMoreAnsweringThanListed(t *testing.T) {
+	for _, c := range []struct {
+		working, listed int
+		want            string
+	}{{3, 23, "3 of 23 models"}, {12, 11, "12 models"}, {1, 1, "1 of 1 model"}, {0, 0, "0 of 0 models"}, {1, 0, "1 model"}} {
+		if got := modelsAnswering(c.working, c.listed); got != c.want {
+			t.Errorf("modelsAnswering(%d,%d) = %q, want %q", c.working, c.listed, got, c.want)
+		}
+	}
+}
