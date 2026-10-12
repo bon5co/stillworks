@@ -95,9 +95,7 @@ templ rejected() {
 					<span class="hint">— endpoints another catalogue calls free, and what they answered here</span>
 				</summary>
 				<p class="caption">
-					Cross-checked against OmniRoute's routing registry on 2026-08-11: 226 providers, 18 of them
-					typed as needing no key. Calling all 18 from this server produced one new claim on the shelf
-					above and no new working endpoint.
+					{ crosscheckCaption() }
 				</p>
 				<dl class="rejects">
 					for _, claim := range RejectedClaims {

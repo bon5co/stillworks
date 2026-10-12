@@ -2,6 +2,7 @@ package audit
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -62,6 +63,46 @@ func TestRejectedClaimsAreNotSeeded(t *testing.T) {
 			if endpoint.BaseURL != "" && strings.HasPrefix(claim.Endpoint, endpoint.BaseURL) {
 				t.Errorf("%s is seeded as %q and also published as rejected", claim.Endpoint, endpoint.Slug)
 			}
+		}
+	}
+}
+
+// The caption under the fold is built from the sweeps, so a sweep that is run
+// and recorded cannot leave the page quoting an older catalogue size.
+func TestCrosscheckCaptionNamesEverySweep(t *testing.T) {
+	if len(CrosscheckSweeps) < 2 {
+		t.Fatal("the second sweep is not recorded")
+	}
+	caption := crosscheckCaption()
+	for _, sweep := range CrosscheckSweeps {
+		if sweep.Providers <= 0 || sweep.Claims <= 0 || sweep.Claims > sweep.Providers {
+			t.Errorf("sweep %s has impossible counts: %+v", sweep.Date, sweep)
+		}
+		if !strings.Contains(caption, sweep.Date) || !strings.Contains(caption, strconv.Itoa(sweep.Providers)) {
+			t.Errorf("sweep %s is missing from the caption: %q", sweep.Date, caption)
+		}
+	}
+}
+
+// What the 2026-10-12 sweep added must be on the keyless shelf. Kilo lists 390
+// models of which 18 are free, so it takes a larger chat share than the default.
+func TestSecondSweepAdditionsAreSeededKeyless(t *testing.T) {
+	want := map[string]bool{"kilo-gateway": false, "free-ai": false}
+	for _, endpoint := range SeedEndpoints {
+		if _, ok := want[endpoint.Slug]; !ok {
+			continue
+		}
+		want[endpoint.Slug] = true
+		if endpoint.AuthMode != AuthModeNone || endpoint.KeyEnv != "" {
+			t.Errorf("%s must be keyless with no key variable", endpoint.Slug)
+		}
+		if endpoint.Slug == "kilo-gateway" && endpoint.ChatProbes <= defaultChatProbesPerCycle {
+			t.Errorf("%s lists mostly paid models and needs a larger probe share", endpoint.Slug)
+		}
+	}
+	for slug, found := range want {
+		if !found {
+			t.Errorf("%s was verified keyless on 2026-10-12 and is not seeded", slug)
 		}
 	}
 }
