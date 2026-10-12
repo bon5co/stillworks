@@ -192,16 +192,16 @@ func providerDescription(row ShelfRow, track TrackRecord) string {
 	}
 	var text string
 	if track.Attempts > 0 && track.Accepted() > 0 && track.Accepted() < track.Attempts {
-		text = fmt.Sprintf("%s: %d of %d models %s at the last check. %.0f%% of the calls it accepted answered in %s, median %d ms. Probe log and curl.",
-			row.Provider, row.WorkingModels, row.ModelsListed, kind,
+		text = fmt.Sprintf("%s: %s %s at the last check. %.0f%% of the calls it accepted answered in %s, median %d ms. Probe log and curl.",
+			row.Provider, modelsAnswering(row.WorkingModels, row.ModelsListed), kind,
 			100*float64(track.Answered)/float64(track.Accepted()), countOf(track.WindowDays, "day"), track.MedianMS)
 	} else if track.Attempts > 0 {
-		text = fmt.Sprintf("%s: %d of %d models %s at the last check. %d of %d real chat calls answered in %s, median %d ms. Probe log and curl.",
-			row.Provider, row.WorkingModels, row.ModelsListed, kind,
+		text = fmt.Sprintf("%s: %s %s at the last check. %d of %d real chat calls answered in %s, median %d ms. Probe log and curl.",
+			row.Provider, modelsAnswering(row.WorkingModels, row.ModelsListed), kind,
 			track.Answered, track.Attempts, countOf(track.WindowDays, "day"), track.MedianMS)
 	} else {
-		text = fmt.Sprintf("%s: %d of %d models %s at the last check. Raw probe log and a working call.",
-			row.Provider, row.WorkingModels, row.ModelsListed, kind)
+		text = fmt.Sprintf("%s: %s %s at the last check. Raw probe log and a working call.",
+			row.Provider, modelsAnswering(row.WorkingModels, row.ModelsListed), kind)
 	}
 	return clipMeta(text, 155)
 }
@@ -442,4 +442,16 @@ func answeringProviders(entries []keylessEntry) int {
 		}
 	}
 	return count
+}
+
+// modelsAnswering is "3 of 23 models" when the count is a part of the listing,
+// and "12 models" when it is not. The two come from different tables -- the
+// verdict column and the newest listing call -- and a listing can come back
+// short of what was verified an hour earlier, so "12 of 11" is reachable and is
+// the sort of sentence this site must never print.
+func modelsAnswering(working, listed int) string {
+	if working > listed {
+		return countOf(working, "model")
+	}
+	return fmt.Sprintf("%d of %s", working, countOf(listed, "model"))
 }
