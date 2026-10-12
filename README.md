@@ -54,6 +54,39 @@ for endpoint in shelf["models"]:            # already ranked, best first
     break
 ```
 
+## How search engines and agents find it
+
+Every address that is content is listed once, in `indexablePages()` in
+`apps/audit/pages.go`, plus one page per active endpoint from the database. That
+one list builds `/sitemap.xml` (with a day-precision `lastmod`), `/llms.txt`, and
+is what the test suite holds the router against: a page cannot be served and
+missing from the sitemap, or listed and not served.
+
+| Address | Indexed | What it is |
+| --- | --- | --- |
+| `/` | yes | The shelf. Title, h1 and meta lead with "free LLM API". |
+| `/free-llm-api-no-key` | yes | Keyless providers with their 14-day track record. |
+| `/free-llm-api-resources-alternatives` | yes | What a static list cannot tell you, and what an hourly probe adds. |
+| `/docs` | yes | The `/api/llm/up` reference, with a live example row. |
+| `/llm/<slug>` | yes | One page per endpoint: a track-record section computed from the probe table, then the models and the raw probe log. |
+| `/stats`, `/mcp/`, 404 and error pages | no | `X-Robots-Tag: noindex, follow`. |
+| `/api/*` | no | `X-Robots-Tag: noindex`. A header, not a `Disallow`: a crawler forbidden to fetch a URL never reads it. |
+| `/llm/`, `/llm/keyed/`, `/llm/try` | no | `301` to the shelf. |
+
+`robots.txt` allows everything, disallows only `/api/llm/try` (which makes an
+outbound call), and carries the `Sitemap:` line. AI crawlers are not blocked:
+the audience is developers and the agents they run.
+
+Titles are held to 60 characters and descriptions to 155 by a test. Each template
+has its own 1200x630 card in `apps/audit/static/card-*.png`, served from this
+origin because the CSP is `default-src 'self'`. JSON-LD is written into the body:
+a `type="application/ld+json"` block is data, so the CSP does not touch it.
+
+When you add a page that is content, add its `pageDef` and its entry in
+`indexablePages()`. When you add an endpoint, its page and sitemap entry follow
+from the database, and its title falls back to `providerHead`'s template unless
+you give it a line there.
+
 ## What "proved" means
 
 A feature is listed as proved only when a real call demonstrated it:

@@ -33,6 +33,8 @@ does **not** fall back to the request's `Host` header — that is the client's o
 text, and resolving a canonical URL against it is how a request arriving under
 somebody else's name gets that name written into this site's canonical URL.
 
+`PUBLIC_ORIGIN` also decides the addresses in `/sitemap.xml`, `/robots.txt`, `/llms.txt` and the JSON-LD. Unlike the canonical link, those fall back to the production host when it is unset rather than going missing, because a sitemap with relative addresses is not a sitemap.
+
 So: set it, and get the social card working. Forget it, and lose only the card.
 Typo it, and the process refuses to start rather than serving nothing quietly.
 
