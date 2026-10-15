@@ -74,12 +74,6 @@ func main() {
 		exit(err)
 	}
 	audit.SetAnalyticsScript(analytics.ScriptPath())
-	// The sponsor page reads its human-visitor figure from Plausible's Stats
-	// API and links a hosted checkout. Both are optional: without them the page
-	// says the figure is unavailable and offers email instead.
-	audit.SetSponsorPlausible(
-		settings.PlausibleHost, settings.PublicOrigin, os.Getenv("PLAUSIBLE_STATS_KEY"))
-	audit.SetSponsorCheckoutURL(os.Getenv("SPONSOR_CHECKOUT_URL"))
 	configured, err := configuredproject.ConfigureWith(auditApp)
 	if err != nil {
 		exit(err)
@@ -167,12 +161,6 @@ func main() {
 	// and the router's CSRF middleware would answer it 403 in production while
 	// passing in local development. Analytics.Mount says the rest.
 	analytics.Mount(handler)
-	// Sponsor purchases fulfil themselves: Polar posts subscription events here.
-	// Outside the router for the same reason as the analytics relay -- a signed
-	// machine-to-machine POST has no CSRF token. Without POLAR_WEBHOOK_SECRET the
-	// endpoint answers 503 to everything.
-	audit.NewSponsorFulfilment(db, os.Getenv("POLAR_WEBHOOK_SECRET"),
-		os.Getenv("POLAR_SPONSOR_PRODUCT_ID"), slog.Default()).Mount(handler)
 	handler.Handle("/", router)
 	listener, err := net.Listen("tcp", address)
 	if err != nil {

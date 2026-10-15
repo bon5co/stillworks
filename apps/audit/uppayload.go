@@ -6,15 +6,12 @@ import "time"
 // can hold it to its invariants without a database.
 //
 // The invariant that matters: working goes into "models" untouched and in the
-// order it arrived, and the sponsor goes into a different key. Callers take
-// models[0] as the pick and models[1:] as the fallback chain. Nothing in this
-// function reads sponsored except the single assignment at the end, so there is
-// no code path along which a paid entry can enter, reorder or filter models.
+// order it arrived. Callers take models[0] as the pick and models[1:] as the
+// fallback chain.
 func upPayload(
 	working []WorkingModel,
 	auth string,
 	features []string,
-	sponsored *SponsoredEntry,
 	now time.Time,
 ) map[string]any {
 	payload := map[string]any{
@@ -50,8 +47,5 @@ func upPayload(
 			"caller could dispatch, a reply that parsed and matched the schema, an answer about an image we sent. " +
 			"Models whose features have never been probed are not returned by a filtered request."
 	}
-	// Always present, null when no sponsor is showing. Its own key, its own
-	// type; see the comment on this function.
-	payload["sponsored"] = sponsored
 	return payload
 }
