@@ -262,8 +262,8 @@ func (r *Recorder) Record(request *http.Request, kind string, status int) {
 	r.RecordAs(request, kind, request.URL.Path, status)
 }
 
-// RecordAs queues one event under a path of the caller's choosing. The sponsor
-// redirect uses it to file a click under the place it came from. A nil recorder
+// RecordAs queues one event under a path of the caller's choosing. Callers use it to file
+// an event under a place other than the request path. A nil recorder
 // counts nothing, like Track.
 func (r *Recorder) RecordAs(request *http.Request, kind, path string, status int) {
 	if r == nil {

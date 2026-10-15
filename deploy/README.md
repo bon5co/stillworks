@@ -116,50 +116,6 @@ comment at the top. Nothing in this repository generates that file. The
 newer per-site `pa-*.js` script, which needs an inline `<script>` this CSP
 forbids.
 
-## Optional: the sponsored slot
-
-`/sponsor` sells one sponsored slot (see the README). Two optional variables:
-
-| Variable               | What it is |
-| ---------------------- | ---------- |
-| `PLAUSIBLE_STATS_KEY`  | A Plausible Stats API key (Settings -> API keys, "Stats API"). With `PLAUSIBLE_HOST` and `PUBLIC_ORIGIN` set, `/sponsor` reads the 30-day human-visitor count live (cached 30 minutes; the last good value is kept for up to 24 hours if Plausible is down). Unset, the page prints the figure as unavailable -- not as zero. |
-| `SPONSOR_CHECKOUT_URL` | Hosted checkout link for the recurring monthly product (Polar checkout link, `https://...`). Unset, the call to action is an email to `contact@supercapybara.com`. |
-
-Neither is a secret you must keep out of a page: the checkout link is public by nature, and
-the stats key is read-only. Keep both in the Dokploy environment anyway, not in the repo.
-
-### Purchases fulfil themselves: `POLAR_WEBHOOK_SECRET`
-
-| Variable                   | What it is |
-| -------------------------- | ---------- |
-| `POLAR_WEBHOOK_SECRET`     | Signing secret of the Polar webhook endpoint for `https://<origin>/api/polar/webhook` (Polar -> Settings -> Webhooks, or `POST /v1/webhooks/endpoints`). A **secret**: keep it in the Dokploy environment only. Unset, the endpoint answers `503` to every request. |
-| `POLAR_SPONSOR_PRODUCT_ID` | Optional. Product sold as the slot. Defaults to the live "stillworks sponsor slot". The endpoint receives every product in the organisation and ignores the others. |
-
-Subscribe the endpoint to `subscription.created`, `.active`, `.updated`, `.canceled`, `.uncanceled`,
-`.cycled`, `.revoked` and `.past_due`. Format `raw`. The checkout must collect the custom fields
-`sponsor_provider`, `sponsor_pitch` and `sponsor_url`. Rotating the secret: reset it in Polar,
-update the variable, redeploy; a delivery made in between is retried by Polar.
-
-An order whose fields fail validation, or whose dates another sponsor holds, is **not published**:
-the house ad keeps showing, the row in `sponsor_orders` keeps what was submitted and why it was
-refused (`manage sponsor orders`), and the container log carries an `ERROR` line containing
-`SPONSOR ORDER REJECTED` or `SPONSOR ORDER BLOCKED`. Polar itself emails the organisation on
-each new subscription, so the sale is never silent.
-
-Setting or ending a sponsor needs no deploy. Run the `manage sponsor` commands inside the app
-container (README, "The sponsored slot"). With shell access to the host:
-
-```bash
-docker exec <app container> ./manage sponsor set -provider ... -pitch ... -url https://... -from YYYY-MM-DD -to YYYY-MM-DD
-```
-
-Without it, Dokploy can run a command in a service of the compose stack: create a compose
-schedule (`schedule.create`, `scheduleType: "compose"`, `serviceName: "app"`, a cron that never
-fires, `enabled: false`), set its `command` with `schedule.update`, run it with
-`schedule.runManually`, and read the output with `deployment.readLogs` on the returned
-`deploymentId`. Set `serviceName` to `stillworks-db` to run `psql` against the database instead.
-This is how the slot was verified live on release 0.13.0.
-
 ## Optional: the key-required shelf
 
 `/?key=key` publishes providers whose free tier needs an API key. We hold one

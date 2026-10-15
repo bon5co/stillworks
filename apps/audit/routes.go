@@ -107,10 +107,9 @@ func SocialCardPath() string { return socialCardPath }
 // long-lived database pool rather than only a router.
 func (a *App) RoutesWithServices(router chi.Router, services web.RuntimeServices) {
 	handlers := &handlers{
-		db:        services.Database,
-		recorder:  a.recorder,
-		tries:     NewTryRunner(a.recorder),
-		plausible: sponsorPlausible,
+		db:       services.Database,
+		recorder: a.recorder,
+		tries:    NewTryRunner(a.recorder),
 	}
 	track := a.recorder.Track
 
@@ -155,13 +154,6 @@ func (a *App) RoutesWithServices(router chi.Router, services web.RuntimeServices
 	router.Get(cardComparePath, serveCard(cardComparePNG, "card-compare.png"))
 	router.Get(cardDocsPath, serveCard(cardDocsPNG, "card-docs.png"))
 
-	// The sponsored slot. /go/sponsor is the first-party redirect every sponsor
-	// link goes through and records its own event, so it is not wrapped in
-	// track: wrapping it would count each click twice, once as a page.
-	router.Get(sponsorPagePath, track(KindPage, handlers.sponsorPage))
-	router.Get(sponsorClickPath, handlers.goSponsor)
-	router.Get("/api/sponsor", track(KindAPI, handlers.apiSponsor))
-
 	router.Get("/api/llm/up", track(KindAPI, handlers.apiUp))
 	router.Get("/api/llm/try", track(KindAPI, handlers.apiTryCall))
 	router.Get("/api/llm/{slug}", track(KindAPI, handlers.apiEndpoint))
@@ -177,9 +169,6 @@ type handlers struct {
 	db       *database.DB
 	recorder *Recorder
 	tries    *TryRunner
-	// plausible reads the human-visitor figure /sponsor prints. Nil when the
-	// deployment has no stats key, which the page says rather than hides.
-	plausible *PlausibleReader
 }
 
 // redirectToShelf answers one of the retired addresses. The filters travel: a
@@ -231,13 +220,12 @@ func (h *handlers) home(response http.ResponseWriter, request *http.Request) {
 		serverError(response, request, err)
 		return
 	}
-	slot := h.sponsorSlot(request.Context())
 	render(response, request, page{
 		Title:       homeDef.Title,
 		Description: homeDef.Description,
 		Canonical:   shelfPath,
 		Schema:      homeGraph(len(total)),
-	}, HomePageWithSlot(rows, len(total), query, lastVerified(total), apiOrigin(), slot))
+	}, HomePage(rows, len(total), query, lastVerified(total), apiOrigin()))
 }
 
 // apiOrigin is the address the page prints in every snippet it invites somebody
@@ -462,12 +450,7 @@ func (h *handlers) apiUp(response http.ResponseWriter, request *http.Request) {
 		writeEnv(response, working)
 		return
 	}
-	slot := h.sponsorSlot(request.Context())
-	var sponsored *SponsoredEntry
-	if slot.Sponsor != nil {
-		sponsored = NewSponsoredEntry(*slot.Sponsor, slot.Probe, apiOrigin())
-	}
-	payload := upPayload(working, auth, features, sponsored, time.Now().UTC())
+	payload := upPayload(working, auth, features, time.Now().UTC())
 	writeJSON(response, http.StatusOK, payload)
 }
 

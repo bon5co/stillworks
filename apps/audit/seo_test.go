@@ -15,7 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func allDefs() []pageDef { return []pageDef{homeDef, keylessDef, alternativesDef, docsDef, sponsorDef} }
+func allDefs() []pageDef { return []pageDef{homeDef, keylessDef, alternativesDef, docsDef} }
 
 // A title over 60 characters is truncated by a search engine, mid-phrase, and
 // BetterLingo's checker page measurably earned the worst click-through on its

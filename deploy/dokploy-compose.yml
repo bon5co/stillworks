@@ -10,7 +10,7 @@
 # and an alias collision there would be an ugly thing to debug.
 services:
   app:
-    image: lodimup/stillworks:0.14.1
+    image: lodimup/stillworks:0.15.0
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://stillworks:${POSTGRES_PASSWORD}@stillworks-db:5432/stillworks?sslmode=disable
@@ -36,17 +36,6 @@ services:
       # changes nothing else. Requires PUBLIC_ORIGIN: Plausible files an event
       # under the domain the event names. See deploy/README.md.
       PLAUSIBLE_HOST: ${PLAUSIBLE_HOST:-}
-      # /sponsor's human-visitor figure, read from Plausible's Stats API, and the
-      # hosted checkout for the sponsored slot. Both optional; unset means the
-      # page says the figure is unavailable / offers email. See deploy/README.md.
-      PLAUSIBLE_STATS_KEY: ${PLAUSIBLE_STATS_KEY:-}
-      SPONSOR_CHECKOUT_URL: ${SPONSOR_CHECKOUT_URL:-}
-      # Polar webhook: a purchase of the sponsor product fills the slot by itself.
-      # The signing secret is created with the Polar endpoint for
-      # /api/polar/webhook and lives only in this stack's environment. Unset, the
-      # endpoint answers 503 to everything. See deploy/README.md.
-      POLAR_WEBHOOK_SECRET: ${POLAR_WEBHOOK_SECRET:-}
-      POLAR_SPONSOR_PRODUCT_ID: ${POLAR_SPONSOR_PRODUCT_ID:-}
       # Free-tier keys for the key-required shelf. See README.md in this
       # directory for where each one comes from and what happens without it.
       #
